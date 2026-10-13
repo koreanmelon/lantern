@@ -45,7 +45,7 @@ func TestResponseCodes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r := runtime{server: &Server{Handler: tc.handler}, timeout: time.Second}
+			r := state{server: &Server{Handler: tc.handler}, timeout: time.Second}
 			encoded, err := r.response(t.Context(), packet, true)
 			if err != nil {
 				t.Fatal(err)
@@ -68,7 +68,7 @@ func TestResponseTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := runtime{timeout: time.Second, server: &Server{Handler: HandlerFunc(
+	r := state{timeout: time.Second, server: &Server{Handler: HandlerFunc(
 		func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
 			response := reply(query, dnsmessage.RCodeSuccess)
 			for range 100 {
@@ -100,7 +100,7 @@ func TestResponseTruncation(t *testing.T) {
 }
 
 func TestResponseRejectsInvalidInput(t *testing.T) {
-	r := runtime{server: &Server{}, timeout: time.Second}
+	r := state{server: &Server{}, timeout: time.Second}
 	if _, err := r.response(t.Context(), []byte{1}, true); err == nil {
 		t.Fatal("accepted malformed packet")
 	}

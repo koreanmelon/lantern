@@ -22,7 +22,7 @@ type Server struct {
 	MaxConcurrent int
 }
 
-type runtime struct {
+type state struct {
 	server  *Server
 	timeout time.Duration
 	slots   chan struct{}
@@ -71,7 +71,7 @@ func (s *Server) Serve(ctx context.Context, udp net.PacketConn, tcp net.Listener
 	if limit == 0 {
 		limit = 128
 	}
-	r := runtime{server: s, timeout: timeout, slots: make(chan struct{}, limit)}
+	st := state{server: s, timeout: timeout, slots: make(chan struct{}, limit)}
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(serveCtx, func() {
@@ -80,22 +80,22 @@ func (s *Server) Serve(ctx context.Context, udp net.PacketConn, tcp net.Listener
 	})
 	defer stop()
 	errorsCh := make(chan error, 2)
-	go func() { errorsCh <- r.serveUDP(serveCtx, udp) }()
-	go func() { errorsCh <- r.serveTCP(serveCtx, tcp) }()
+	go func() { errorsCh <- st.serveUDP(serveCtx, udp) }()
+	go func() { errorsCh <- st.serveTCP(serveCtx, tcp) }()
 	err := <-errorsCh
 	cancel()
 	// Close synchronously as well, so both loops stop before waiting on workers.
 	udp.Close()
 	tcp.Close()
 	<-errorsCh
-	r.workers.Wait()
+	st.workers.Wait()
 	if ctx.Err() != nil {
 		return nil
 	}
 	return err
 }
 
-func (r *runtime) response(ctx context.Context, packet []byte, udp bool) ([]byte, error) {
+func (s *state) response(ctx context.Context, packet []byte, udp bool) ([]byte, error) {
 	query, err := Parse(packet)
 	if err != nil {
 		return nil, err
@@ -109,12 +109,12 @@ func (r *runtime) response(ctx context.Context, packet []byte, udp bool) ([]byte
 		response = reply(query, dnsmessage.RCodeNotImplemented)
 	case len(query.Questions) != 1:
 		response = reply(query, dnsmessage.RCodeFormatError)
-	case r.server.Handler == nil:
+	case s.server.Handler == nil:
 		response = reply(query, dnsmessage.RCodeRefused)
 	default:
-		handlerCtx, cancel := context.WithTimeout(ctx, r.timeout)
+		handlerCtx, cancel := context.WithTimeout(ctx, s.timeout)
 		defer cancel()
-		response, err = r.server.Handler.Handle(handlerCtx, query)
+		response, err = s.server.Handler.Handle(handlerCtx, query)
 		if err != nil {
 			response = reply(query, dnsmessage.RCodeServerFailure)
 		}
