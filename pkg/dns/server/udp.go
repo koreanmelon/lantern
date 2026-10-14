@@ -6,7 +6,7 @@ import (
 	"net"
 )
 
-func (s *state) serveUDP(ctx context.Context, conn net.PacketConn) error {
+func (s *Server) serveUDP(ctx context.Context, conn net.PacketConn) error {
 	buffer := make([]byte, 65535)
 	for {
 		n, address, err := conn.ReadFrom(buffer)

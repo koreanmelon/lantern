@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func (s *state) serveTCP(ctx context.Context, listener net.Listener) error {
+func (s *Server) serveTCP(ctx context.Context, listener net.Listener) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -29,12 +29,12 @@ func (s *state) serveTCP(ctx context.Context, listener net.Listener) error {
 	}
 }
 
-func (s *state) handleTCP(ctx context.Context, conn net.Conn) {
+func (s *Server) handleTCP(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 	for ctx.Err() == nil {
-		if err := conn.SetReadDeadline(time.Now().Add(s.timeout)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(s.Config.Timeout)); err != nil {
 			return
 		}
 		var prefix [2]byte
@@ -50,7 +50,7 @@ func (s *state) handleTCP(ctx context.Context, conn net.Conn) {
 			return
 		}
 		binary.BigEndian.PutUint16(prefix[:], uint16(len(response)))
-		if err := conn.SetWriteDeadline(time.Now().Add(s.timeout)); err != nil {
+		if err := conn.SetWriteDeadline(time.Now().Add(s.Config.Timeout)); err != nil {
 			return
 		}
 		// io.Copy handles partial writes; send prefix and message as one frame.

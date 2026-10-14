@@ -22,7 +22,7 @@ func newRootCommand(serve func(context.Context, string) error) *cobra.Command {
 			return serve(cmd.Context(), address)
 		},
 	}
-	cmd.Flags().StringVar(&address, "dns-listen", "127.0.0.1:1053", "DNS UDP and TCP listen address")
+	cmd.Flags().StringVar(&address, "dns-listen", dnsserver.DefaultAddress, "DNS UDP and TCP listen address")
 	return cmd
 }
 
@@ -32,9 +32,12 @@ func serveDNS(ctx context.Context, address string) error {
 		return err
 	}
 	s := dnsserver.Server{
-		Handler:       handler.Handle,
-		Timeout:       10 * time.Second,
-		MaxConcurrent: 10,
+		Config: dnsserver.Config{
+			Address:     address,
+			Handler:     handler.Handle,
+			Timeout:     10 * time.Second,
+			Concurrency: 10,
+		},
 	}
-	return s.ListenAndServe(ctx, address)
+	return s.ListenAndServe(ctx)
 }

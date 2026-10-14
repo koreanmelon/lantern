@@ -6,38 +6,35 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"time"
-
-	"golang.org/x/net/dns/dnsmessage"
+	"sync/atomic"
 )
 
-// Server serves DNS over UDP and TCP. Its fields must not change while serving.
-type Server struct {
-	// Handler processes queries concurrently and must honor context cancellation.
-	// A nil handler refuses queries until resolution is configured.
-	Handler func(context.Context, dnsmessage.Message) (dnsmessage.Message, error)
-	// Timeout bounds each TCP I/O operation and handler invocation. Zero uses 5s.
-	Timeout time.Duration
-	// MaxConcurrent limits UDP requests and active TCP connections together.
-	// Zero uses 128. Requests exceeding the limit are dropped or disconnected.
-	MaxConcurrent int
-}
+// ErrAlreadyServing indicates that a Server already has an active Serve call.
+var ErrAlreadyServing = errors.New("DNS server is already serving")
 
-type state struct {
-	handler func(context.Context, dnsmessage.Message) (dnsmessage.Message, error)
-	timeout time.Duration
+// Server serves DNS over UDP and TCP. Set Config before serving; startup fills
+// its zero-valued settings with defaults. Do not modify Config while serving.
+// A Server must not be copied after first use.
+type Server struct {
+	Config Config
+
+	serving atomic.Bool
 	slots   chan struct{}
 	workers sync.WaitGroup
 }
 
-// ListenAndServe binds both transports to address. Port zero selects the same
-// ephemeral port for both. The default address is loopback port 1053.
-func (s *Server) ListenAndServe(ctx context.Context, address string) error {
-	if address == "" {
-		address = "127.0.0.1:1053"
+// ListenAndServe binds both transports to Config.Address. Port zero selects the
+// same ephemeral port for both. It rejects overlapping serving calls.
+func (s *Server) ListenAndServe(ctx context.Context) error {
+	if !s.serving.CompareAndSwap(false, true) {
+		return ErrAlreadyServing
+	}
+	defer s.serving.Store(false)
+	if err := s.Config.setDefaults(); err != nil {
+		return err
 	}
 	var lc net.ListenConfig
-	tcp, err := lc.Listen(ctx, "tcp", address)
+	tcp, err := lc.Listen(ctx, "tcp", s.Config.Address)
 	if err != nil {
 		return fmt.Errorf("listen DNS TCP: %w", err)
 	}
@@ -47,12 +44,18 @@ func (s *Server) ListenAndServe(ctx context.Context, address string) error {
 		return fmt.Errorf("listen DNS UDP: %w", err)
 	}
 	defer udp.Close()
-	return s.Serve(ctx, udp, tcp)
+	return s.serve(ctx, udp, tcp)
 }
 
 // Serve owns and closes both listeners, including on cancellation or failure.
-// It waits for active handlers to finish; handlers must honor cancellation.
+// An overlapping call returns ErrAlreadyServing without taking ownership of
+// its listeners. Sequential calls are allowed after Serve returns.
+// Serve waits for active handlers to finish; handlers must honor cancellation.
 func (s *Server) Serve(ctx context.Context, udp net.PacketConn, tcp net.Listener) error {
+	if !s.serving.CompareAndSwap(false, true) {
+		return ErrAlreadyServing
+	}
+	defer s.serving.Store(false)
 	if udp != nil {
 		defer udp.Close()
 	}
@@ -62,17 +65,14 @@ func (s *Server) Serve(ctx context.Context, udp net.PacketConn, tcp net.Listener
 	if udp == nil || tcp == nil {
 		return errors.New("DNS requires both UDP and TCP listeners")
 	}
-	if s.Timeout < 0 || s.MaxConcurrent < 0 {
-		return errors.New("DNS timeout and concurrency limit must not be negative")
+	if err := s.Config.setDefaults(); err != nil {
+		return err
 	}
-	timeout, limit := s.Timeout, s.MaxConcurrent
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
-	if limit == 0 {
-		limit = 128
-	}
-	st := state{handler: s.Handler, timeout: timeout, slots: make(chan struct{}, limit)}
+	return s.serve(ctx, udp, tcp)
+}
+
+func (s *Server) serve(ctx context.Context, udp net.PacketConn, tcp net.Listener) error {
+	s.slots = make(chan struct{}, s.Config.Concurrency)
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(serveCtx, func() {
@@ -81,15 +81,15 @@ func (s *Server) Serve(ctx context.Context, udp net.PacketConn, tcp net.Listener
 	})
 	defer stop()
 	errorsCh := make(chan error, 2)
-	go func() { errorsCh <- st.serveUDP(serveCtx, udp) }()
-	go func() { errorsCh <- st.serveTCP(serveCtx, tcp) }()
+	go func() { errorsCh <- s.serveUDP(serveCtx, udp) }()
+	go func() { errorsCh <- s.serveTCP(serveCtx, tcp) }()
 	err := <-errorsCh
 	cancel()
 	// Close synchronously as well, so both loops stop before waiting on workers.
 	udp.Close()
 	tcp.Close()
 	<-errorsCh
-	st.workers.Wait()
+	s.workers.Wait()
 	if ctx.Err() != nil {
 		return nil
 	}

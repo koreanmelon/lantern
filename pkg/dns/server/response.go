@@ -7,7 +7,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-func (s *state) response(ctx context.Context, packet []byte, udp bool) ([]byte, error) {
+func (s *Server) response(ctx context.Context, packet []byte, udp bool) ([]byte, error) {
 	var query dnsmessage.Message
 	if err := query.Unpack(packet); err != nil {
 		return nil, err
@@ -21,13 +21,13 @@ func (s *state) response(ctx context.Context, packet []byte, udp bool) ([]byte, 
 		response.RCode = dnsmessage.RCodeNotImplemented
 	case len(query.Questions) != 1:
 		response.RCode = dnsmessage.RCodeFormatError
-	case s.handler == nil:
+	case s.Config.Handler == nil:
 		response.RCode = dnsmessage.RCodeRefused
 	default:
-		handlerCtx, cancel := context.WithTimeout(ctx, s.timeout)
+		handlerCtx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
 		defer cancel()
 		var err error
-		response, err = s.handler(handlerCtx, query)
+		response, err = s.Config.Handler(handlerCtx, query)
 		if err != nil {
 			response = dnsmessage.Message{Header: dnsmessage.Header{RCode: dnsmessage.RCodeServerFailure}}
 		}

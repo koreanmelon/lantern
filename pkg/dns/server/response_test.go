@@ -45,7 +45,7 @@ func TestResponseCodes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r := state{handler: tc.handler, timeout: time.Second}
+			r := Server{Config: Config{Handler: tc.handler, Timeout: time.Second}}
 			encoded, err := r.response(t.Context(), packet, true)
 			if err != nil {
 				t.Fatal(err)
@@ -68,7 +68,7 @@ func TestResponseTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := state{timeout: time.Second, handler: func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
+	r := Server{Config: Config{Timeout: time.Second, Handler: func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
 		var response dnsmessage.Message
 		for range 100 {
 			response.Answers = append(response.Answers, dnsmessage.Resource{
@@ -78,7 +78,7 @@ func TestResponseTruncation(t *testing.T) {
 		}
 		return response, nil
 	},
-	}
+	}}
 	for _, udp := range []bool{true, false} {
 		encoded, err := r.response(t.Context(), packet, udp)
 		if err != nil {
@@ -99,7 +99,7 @@ func TestResponseTruncation(t *testing.T) {
 }
 
 func TestResponseRejectsInvalidInput(t *testing.T) {
-	r := state{timeout: time.Second}
+	r := Server{Config: Config{Timeout: time.Second}}
 	for _, tc := range []struct {
 		name   string
 		packet []byte
@@ -139,7 +139,7 @@ func FuzzResponse(f *testing.F) {
 	}
 	f.Add(packet)
 	f.Fuzz(func(t *testing.T, packet []byte) {
-		s := state{timeout: time.Second}
+		s := Server{Config: Config{Timeout: time.Second}}
 		response, err := s.response(t.Context(), packet, true)
 		if err != nil {
 			return

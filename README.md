@@ -64,15 +64,18 @@ DNSSEC, dynamic updates, EDNS negotiation, and hot reload are unsupported. Unkno
 ordinary query types use normal NODATA/NXDOMAIN behavior. The handler always
 advertises recursion as unavailable.
 
-`dnsserver.Server` accepts a function in its `Handler` field:
+All server settings are in `dnsserver.Config`, including the handler function:
 
 ```go
 authority, err := dns.NewAuthoritative(zone)
 if err != nil {
     return err
 }
-s := dnsserver.Server{Handler: authority.Handle}
-return s.ListenAndServe(ctx, "127.0.0.1:1053")
+s := dnsserver.Server{Config: dnsserver.Config{
+    Address: "127.0.0.1:1053",
+    Handler: authority.Handle,
+}}
+return s.ListenAndServe(ctx)
 ```
 
 The function must be safe for concurrent calls and honor cancellation. A nil handler
@@ -82,10 +85,19 @@ receive `NOTIMP`; queries must contain exactly one question.
 
 UDP responses are capped at 512 bytes, with oversized responses reduced to a
 truncated reply for TCP retry. TCP supports multiple sequential queries per
-connection, but not out-of-order pipelined processing. Defaults are a five-second
-I/O/handler timeout and a shared limit of 128 UDP requests/TCP connections.
+connection, but not out-of-order pipelined processing. Defaults are a one-second
+I/O/handler timeout and a shared limit of 100 UDP requests/TCP connections.
+The default address is `127.0.0.1:1053`. Startup populates zero-valued settings
+in `Config` from the package's default constants.
 The command currently overrides these defaults to 10 seconds and 10 respectively.
 Handlers must honor cancellation; Go cannot forcibly terminate handler code.
+
+Each `Server` owns its concurrency limit and active workers. Only one `Serve`
+call may run on an instance at a time; overlapping calls return
+`dnsserver.ErrAlreadyServing` without closing their supplied listeners. Once
+`Serve` returns and its workers have stopped, the instance can serve again.
+Do not copy a server after first use. Set `Config` before serving;
+live record changes belong in the handler's data, not the transport options.
 
 ## Test
 
