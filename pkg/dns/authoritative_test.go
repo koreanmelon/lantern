@@ -1,0 +1,263 @@
+package dns
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"golang.org/x/net/dns/dnsmessage"
+)
+
+func ask(t *testing.T, handler *Authoritative, name string, typ dnsmessage.Type) dnsmessage.Message {
+	t.Helper()
+	query := dnsmessage.Message{
+		Header:    dnsmessage.Header{ID: 42, RecursionDesired: true},
+		Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(name), Type: typ, Class: dnsmessage.ClassINET}},
+	}
+	response, err := handler.Handle(t.Context(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.Response || response.ID != query.ID || !response.RecursionDesired || response.RecursionAvailable ||
+		len(response.Questions) != 1 || response.Questions[0] != query.Questions[0] {
+		t.Fatalf("incorrect response envelope: %s", response.GoString())
+	}
+	return response
+}
+
+func TestAuthoritativeLookup(t *testing.T) {
+	z := newTestZone(t, "home.arpa.",
+		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}),
+		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 2}}),
+		record("api.apps.home.arpa.", dnsmessage.TypeAAAA, &dnsmessage.AAAAResource{AAAA: [16]byte{0x20, 1, 0xd, 0xb8}}),
+	)
+	handler, err := NewAuthoritative(z)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name          string
+		typ           dnsmessage.Type
+		code          dnsmessage.RCode
+		answers       int
+		authoritative bool
+		negative      bool
+	}{
+		{"app.home.arpa.", dnsmessage.TypeA, dnsmessage.RCodeSuccess, 2, true, false},
+		{"APP.Home.ARPA.", dnsmessage.TypeA, dnsmessage.RCodeSuccess, 2, true, false},
+		{"api.apps.home.arpa.", dnsmessage.TypeAAAA, dnsmessage.RCodeSuccess, 1, true, false},
+		{"app.home.arpa.", dnsmessage.TypeAAAA, dnsmessage.RCodeSuccess, 0, true, true},
+		{"apps.home.arpa.", dnsmessage.TypeA, dnsmessage.RCodeSuccess, 0, true, true},
+		{"missing.home.arpa.", dnsmessage.TypeA, dnsmessage.RCodeNameError, 0, true, true},
+		{"*.home.arpa.", dnsmessage.TypeA, dnsmessage.RCodeNameError, 0, true, true},
+		{"*.example.com.", dnsmessage.TypeA, dnsmessage.RCodeRefused, 0, false, false},
+		{"home.arpa.", dnsmessage.TypeSOA, dnsmessage.RCodeSuccess, 1, true, false},
+		{"home.arpa.", dnsmessage.TypeNS, dnsmessage.RCodeSuccess, 1, true, false},
+		{"home.arpa.", dnsmessage.TypeA, dnsmessage.RCodeSuccess, 0, true, true},
+		{"app.home.arpa.", 65000, dnsmessage.RCodeSuccess, 0, true, true},
+		{"example.com.", dnsmessage.TypeA, dnsmessage.RCodeRefused, 0, false, false},
+		{"nothome.arpa.", dnsmessage.TypeA, dnsmessage.RCodeRefused, 0, false, false},
+		{"app.home.arpa.", dnsmessage.TypeALL, dnsmessage.RCodeRefused, 0, false, false},
+		{"home.arpa.", 252, dnsmessage.RCodeRefused, 0, false, false},
+	} {
+		t.Run(fmt.Sprintf("%s/%d", tc.name, tc.typ), func(t *testing.T) {
+			got := ask(t, handler, tc.name, tc.typ)
+			if got.RCode != tc.code || got.Authoritative != tc.authoritative || len(got.Answers) != tc.answers {
+				t.Fatalf("unexpected response: %s", got.GoString())
+			}
+			if tc.negative {
+				if len(got.Authorities) != 1 || got.Authorities[0].Header.Type != dnsmessage.TypeSOA || got.Authorities[0].Header.TTL != 60 {
+					t.Fatalf("incorrect negative SOA: %s", got.GoString())
+				}
+			} else if len(got.Authorities) != 0 {
+				t.Fatal("unexpected authority records")
+			}
+		})
+	}
+}
+
+func TestAuthoritativeCNAME(t *testing.T) {
+	alias := func(name, target string) dnsmessage.Resource {
+		return record(name+".home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName(target)})
+	}
+	extra := []dnsmessage.Resource{
+		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}),
+		alias("alias", "APP.home.arpa."), alias("chain", "alias.home.arpa."),
+		alias("external", "example.com."), alias("missing", "absent.home.arpa."),
+		alias("loop1", "loop2.home.arpa."), alias("loop2", "loop1.home.arpa."),
+	}
+	for i := range 18 {
+		extra = append(extra, alias(fmt.Sprintf("long%d", i), fmt.Sprintf("long%d.home.arpa.", i+1)))
+	}
+	extra = append(extra, record("long18.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{}))
+	handler, err := NewAuthoritative(newTestZone(t, "home.arpa.", extra...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		typ      dnsmessage.Type
+		code     dnsmessage.RCode
+		answers  int
+		negative bool
+	}{
+		{"alias", dnsmessage.TypeA, dnsmessage.RCodeSuccess, 2, false},
+		{"chain", dnsmessage.TypeA, dnsmessage.RCodeSuccess, 3, false},
+		{"alias", dnsmessage.TypeCNAME, dnsmessage.RCodeSuccess, 1, false},
+		{"alias", dnsmessage.TypeAAAA, dnsmessage.RCodeSuccess, 1, true},
+		{"external", dnsmessage.TypeA, dnsmessage.RCodeSuccess, 1, false},
+		{"missing", dnsmessage.TypeA, dnsmessage.RCodeNameError, 1, true},
+		{"loop1", dnsmessage.TypeA, dnsmessage.RCodeServerFailure, 0, false},
+		{"long0", dnsmessage.TypeA, dnsmessage.RCodeServerFailure, 0, false},
+		{"long1", dnsmessage.TypeA, dnsmessage.RCodeServerFailure, 0, false},
+		{"long2", dnsmessage.TypeA, dnsmessage.RCodeSuccess, 17, false},
+	} {
+		t.Run(fmt.Sprintf("%s/%d", tc.name, tc.typ), func(t *testing.T) {
+			got := ask(t, handler, tc.name+".home.arpa.", tc.typ)
+			if got.RCode != tc.code || len(got.Answers) != tc.answers || !got.Authoritative || (len(got.Authorities) == 1) != tc.negative {
+				t.Fatalf("unexpected alias result: %s", got.GoString())
+			}
+		})
+	}
+}
+
+func TestAuthoritativeRecordTypesAndIsolation(t *testing.T) {
+	txt := &dnsmessage.TXTResource{TXT: []string{"hello", "world"}}
+	z := newTestZone(t, "home.arpa.",
+		record("app.home.arpa.", dnsmessage.TypeTXT, txt),
+		record("home.arpa.", dnsmessage.TypeMX, &dnsmessage.MXResource{Pref: 10, MX: dnsmessage.MustNewName("mail.home.arpa.")}),
+		record("_web._tcp.home.arpa.", dnsmessage.TypeSRV, &dnsmessage.SRVResource{Priority: 1, Weight: 2, Port: 443, Target: dnsmessage.MustNewName("app.home.arpa.")}),
+		record("ptr.home.arpa.", dnsmessage.TypePTR, &dnsmessage.PTRResource{PTR: dnsmessage.MustNewName("app.home.arpa.")}),
+	)
+	txt.TXT[0] = "mutated input"
+	handler, err := NewAuthoritative(z)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		typ  dnsmessage.Type
+	}{
+		{"app.home.arpa.", dnsmessage.TypeTXT}, {"home.arpa.", dnsmessage.TypeMX},
+		{"_web._tcp.home.arpa.", dnsmessage.TypeSRV}, {"ptr.home.arpa.", dnsmessage.TypePTR},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ask(t, handler, tc.name, tc.typ)
+			if len(got.Answers) != 1 || got.Answers[0].Header.Type != tc.typ {
+				t.Fatal("missing record")
+			}
+		})
+	}
+	got := ask(t, handler, "app.home.arpa.", dnsmessage.TypeTXT)
+	body := got.Answers[0].Body.(*dnsmessage.TXTResource)
+	if body.TXT[0] != "hello" {
+		t.Fatal("zone aliases constructor input")
+	}
+	body.TXT[0] = "mutated output"
+	got.Answers[0].Header.TTL = 1
+	again := ask(t, handler, "app.home.arpa.", dnsmessage.TypeTXT)
+	if again.Answers[0].Body.(*dnsmessage.TXTResource).TXT[0] != "hello" || again.Answers[0].Header.TTL != 300 {
+		t.Fatal("zone aliases returned response")
+	}
+}
+
+func TestAuthoritativeMultipleZones(t *testing.T) {
+	parent := newTestZone(t, "home.arpa.", record("app.child.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}))
+	child := newTestZone(t, "child.home.arpa.", record("app.child.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 2}}))
+	handler, err := NewAuthoritative(parent, child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ask(t, handler, "app.child.home.arpa.", dnsmessage.TypeA)
+	if got.Answers[0].Body.(*dnsmessage.AResource).A[3] != 2 {
+		t.Fatal("did not select child zone")
+	}
+	if _, err := NewAuthoritative(parent, parent); err == nil {
+		t.Fatal("accepted duplicate zones")
+	}
+	if _, err := NewAuthoritative(nil); err == nil {
+		t.Fatal("accepted nil zone")
+	}
+	if _, err := NewAuthoritative(&Zone{}); err == nil {
+		t.Fatal("accepted uninitialized zone")
+	}
+}
+
+func TestAuthoritativeCancellationAndValidation(t *testing.T) {
+	handler, err := NewAuthoritative(newTestZone(t, "home.arpa."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := handler.Handle(ctx, dnsmessage.Message{}); err != context.Canceled {
+		t.Fatalf("got %v", err)
+	}
+	response, err := handler.Handle(t.Context(), dnsmessage.Message{})
+	if err != nil || response.RCode != dnsmessage.RCodeFormatError {
+		t.Fatal("accepted empty question")
+	}
+	query := dnsmessage.Message{Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName("home.arpa."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassCHAOS}}}
+	response, err = handler.Handle(t.Context(), query)
+	if err != nil || response.RCode != dnsmessage.RCodeRefused {
+		t.Fatal("accepted unsupported class")
+	}
+}
+
+func TestAuthoritativeCrossZoneCNAME(t *testing.T) {
+	parent := newTestZone(t, "home.arpa.", record("alias.home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("app.other.arpa.")}))
+	other := newTestZone(t, "other.arpa.", record("app.other.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 5}}))
+	handler, err := NewAuthoritative(parent, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ask(t, handler, "alias.home.arpa.", dnsmessage.TypeA)
+	if got.RCode != dnsmessage.RCodeSuccess || len(got.Answers) != 2 {
+		t.Fatal("cross-zone alias did not resolve")
+	}
+
+	mail := newTestZone(t, "mail.arpa.", record("mail.arpa.", dnsmessage.TypeMX, &dnsmessage.MXResource{MX: dnsmessage.MustNewName("alias.home.arpa.")}))
+	if _, err := NewAuthoritative(mail, parent); err == nil {
+		t.Fatal("accepted cross-zone MX alias")
+	}
+}
+
+func TestAuthoritativeNegativeTTL(t *testing.T) {
+	records := baseRecords("home.arpa.")
+	records[0].Header.TTL = 30 // Lower than SOA.MinTTL (60).
+	zone, err := NewZone("home.arpa.", records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewAuthoritative(zone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ask(t, handler, "absent.home.arpa.", dnsmessage.TypeA)
+	if got.Authorities[0].Header.TTL != 30 {
+		t.Fatal("negative TTL exceeds SOA TTL")
+	}
+}
+
+func TestAuthoritativeRootZone(t *testing.T) {
+	zone, err := NewZone(".", []dnsmessage.Resource{
+		record(".", dnsmessage.TypeSOA, &dnsmessage.SOAResource{NS: dnsmessage.MustNewName("ns."), MBox: dnsmessage.MustNewName("hostmaster."), MinTTL: 60}),
+		record(".", dnsmessage.TypeNS, &dnsmessage.NSResource{NS: dnsmessage.MustNewName("ns.")}),
+		record("app.example.", dnsmessage.TypeA, &dnsmessage.AResource{}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewAuthoritative(zone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ask(t, handler, "example.", dnsmessage.TypeA)
+	if got.RCode != dnsmessage.RCodeSuccess || len(got.Authorities) != 1 {
+		t.Fatal("root-zone intermediate name missing")
+	}
+	got = ask(t, handler, "absent.", dnsmessage.TypeA)
+	if got.RCode != dnsmessage.RCodeNameError || !got.Authoritative {
+		t.Fatal("root zone not authoritative")
+	}
+}

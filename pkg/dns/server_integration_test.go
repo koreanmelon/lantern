@@ -5,8 +5,11 @@ package dns
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -15,14 +18,25 @@ import (
 
 func startTestServer(t *testing.T, server *Server) (string, context.CancelFunc, <-chan error) {
 	t.Helper()
-	tcp, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	udp, err := net.ListenPacket("udp4", tcp.Addr().String())
-	if err != nil {
+	var tcp net.Listener
+	var udp net.PacketConn
+	for attempt := 0; attempt < 20; attempt++ {
+		var err error
+		tcp, err = net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		udp, err = net.ListenPacket("udp4", tcp.Addr().String())
+		if err == nil {
+			break
+		}
 		tcp.Close()
-		t.Fatal(err)
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			t.Fatal(err)
+		}
+	}
+	if udp == nil {
+		t.Fatal("could not allocate a shared UDP/TCP test port")
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -39,6 +53,89 @@ func startTestServer(t *testing.T, server *Server) (string, context.CancelFunc, 
 		}
 	})
 	return tcp.Addr().String(), cancel, done
+}
+
+func TestAuthoritativeTransports(t *testing.T) {
+	handler, err := NewAuthoritative(newTestZone(t, "home.arpa.",
+		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}),
+		record("large.home.arpa.", dnsmessage.TypeTXT, &dnsmessage.TXTResource{TXT: []string{
+			strings.Repeat("a", 250), strings.Repeat("b", 250), strings.Repeat("c", 250),
+		}}),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	address, _, _ := startTestServer(t, &Server{Handler: handler})
+	for _, network := range []string{"udp", "tcp"} {
+		for _, tc := range []struct {
+			name    string
+			typ     dnsmessage.Type
+			code    dnsmessage.RCode
+			answers int
+		}{
+			{"app.home.arpa.", dnsmessage.TypeA, dnsmessage.RCodeSuccess, 1},
+			{"app.home.arpa.", dnsmessage.TypeAAAA, dnsmessage.RCodeSuccess, 0},
+			{"absent.home.arpa.", dnsmessage.TypeA, dnsmessage.RCodeNameError, 0},
+			{"large.home.arpa.", dnsmessage.TypeTXT, dnsmessage.RCodeSuccess, 1},
+		} {
+			t.Run(network+"/"+tc.name+"/"+tc.typ.String(), func(t *testing.T) {
+				query := dnsmessage.Message{Header: dnsmessage.Header{ID: 42, RecursionDesired: true}, Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(tc.name), Type: tc.typ, Class: dnsmessage.ClassINET}}}
+				packet, err := query.Pack()
+				if err != nil {
+					t.Fatal(err)
+				}
+				conn, err := net.Dial(network, address)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.Close()
+				if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				if network == "tcp" {
+					var prefix [2]byte
+					binary.BigEndian.PutUint16(prefix[:], uint16(len(packet)))
+					if _, err := conn.Write(append(prefix[:], packet...)); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := io.ReadFull(conn, prefix[:]); err != nil {
+						t.Fatal(err)
+					}
+					packet = make([]byte, int(binary.BigEndian.Uint16(prefix[:])))
+					if _, err := io.ReadFull(conn, packet); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if _, err := conn.Write(packet); err != nil {
+						t.Fatal(err)
+					}
+					packet = make([]byte, 65535)
+					n, err := conn.Read(packet)
+					if err != nil {
+						t.Fatal(err)
+					}
+					packet = packet[:n]
+				}
+				response, err := Parse(packet)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.ID != 42 || !response.Authoritative || response.RecursionAvailable || response.RCode != tc.code {
+					t.Fatalf("incorrect response: %s", response.GoString())
+				}
+				if network == "udp" && tc.name == "large.home.arpa." {
+					if !response.Truncated || len(packet) > 512 {
+						t.Fatal("oversized UDP answer not truncated")
+					}
+				} else if response.Truncated || len(response.Answers) != tc.answers {
+					t.Fatal("incorrect complete answer")
+				}
+				if tc.answers == 0 && (len(response.Authorities) != 1 || response.Authorities[0].Header.TTL != 60) {
+					t.Fatal("negative answer missing SOA")
+				}
+			})
+		}
+	}
 }
 
 func TestServerTransports(t *testing.T) {
