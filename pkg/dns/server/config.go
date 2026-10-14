@@ -19,7 +19,15 @@ type Config struct {
 	// Serve uses the supplied listeners instead.
 	Address string
 	// Handler must be safe for concurrent calls and honor context cancellation.
-	// A nil handler returns REFUSED.
+	// It receives one standard query question and owns the returned RCode,
+	// Authoritative/RecursionAvailable flags, and resource-record sections.
+	// The server sets ID, Response, OpCode, RecursionDesired, and Questions from
+	// the request, and handles framing and UDP truncation. Other returned flags
+	// are preserved. Handlers must not mutate the query's Questions slice or
+	// modify returned data after returning it.
+	// DNS outcomes such as NXDOMAIN are responses, not errors. A Go error
+	// discards the returned message and produces SERVFAIL. A nil handler
+	// returns REFUSED.
 	Handler func(context.Context, dnsmessage.Message) (dnsmessage.Message, error)
 	// Timeout bounds TCP I/O and handler calls. Zero uses DefaultTimeout.
 	Timeout time.Duration
@@ -28,7 +36,7 @@ type Config struct {
 	Concurrency int
 }
 
-func (c *Config) setDefaults() error {
+func (c *Config) SetDefaults() error {
 	if c.Timeout < 0 || c.Concurrency < 0 {
 		return errors.New("DNS timeout and concurrency limit must not be negative")
 	}

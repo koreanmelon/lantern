@@ -103,11 +103,11 @@ func TestServerRejectsOverlappingServe(t *testing.T) {
 	udp, tcp := listenTestPair(t)
 	defer udp.Close()
 	defer tcp.Close()
-	if err := s.Serve(t.Context(), udp, tcp); !errors.Is(err, dnsserver.ErrAlreadyServing) {
-		t.Fatalf("got %v, want ErrAlreadyServing", err)
+	if err := s.Serve(t.Context(), udp, tcp); err == nil {
+		t.Fatal("Serve accepted an overlapping call")
 	}
-	if err := s.ListenAndServe(t.Context()); !errors.Is(err, dnsserver.ErrAlreadyServing) {
-		t.Fatalf("ListenAndServe: got %v, want ErrAlreadyServing", err)
+	if err := s.ListenAndServe(t.Context()); err == nil {
+		t.Fatal("ListenAndServe accepted an overlapping call")
 	}
 	// Rejected calls must not close the supplied listeners (which could even be
 	// the active call's listeners). Their ownership remains with the caller.
@@ -239,8 +239,13 @@ func TestServerStaysBusyUntilHandlersStop(t *testing.T) {
 		t.Fatal("handler did not start")
 	}
 	cancel()
-	if err := s.Serve(t.Context(), nil, nil); !errors.Is(err, dnsserver.ErrAlreadyServing) {
-		t.Fatalf("server released guard before its handlers stopped: %v", err)
+	udp, tcp := listenTestPair(t)
+	defer udp.Close()
+	defer tcp.Close()
+	attemptCtx, stop := context.WithCancel(t.Context())
+	stop()
+	if err := s.Serve(attemptCtx, udp, tcp); err == nil {
+		t.Fatal("server released guard before its handlers stopped")
 	}
 }
 

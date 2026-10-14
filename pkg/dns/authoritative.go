@@ -2,132 +2,89 @@ package dns
 
 import (
 	"context"
-	"fmt"
-	"sort"
+	"sync/atomic"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
 
 // Authoritative answers only from its configured zones, without recursion or
-// forwarding. It is safe for concurrent use. Its zero value refuses all queries.
+// forwarding. It is safe for concurrent queries and zone replacement. Its zero
+// value refuses all queries. It must not be copied after first use.
 type Authoritative struct {
-	zones []*Zone
+	snapshot atomic.Pointer[zoneSnapshot]
 }
 
-// NewAuthoritative captures immutable zones, selecting the longest matching
-// origin when zones overlap. Uninitialized or duplicate zones are rejected.
+// NewAuthoritative validates and installs an initial set of immutable zones.
 func NewAuthoritative(zones ...*Zone) (*Authoritative, error) {
-	a := &Authoritative{zones: append([]*Zone(nil), zones...)}
-	seen := make(map[string]bool)
-	for _, zone := range a.zones {
-		if zone == nil || zone.origin == "" {
-			return nil, fmt.Errorf("uninitialized zone")
-		}
-		if seen[zone.origin] {
-			return nil, fmt.Errorf("duplicate zone %s", zone.origin)
-		}
-		seen[zone.origin] = true
-	}
-	sort.Slice(a.zones, func(i, j int) bool { return len(a.zones[i].origin) > len(a.zones[j].origin) })
-	for _, zone := range a.zones {
-		if err := zone.validateTargets(func(name string) bool {
-			targetZone := a.zoneFor(name)
-			return targetZone != nil && len(targetZone.records[name][dnsmessage.TypeCNAME]) != 0
-		}); err != nil {
-			return nil, err
-		}
+	a := &Authoritative{}
+	if err := a.ReplaceZones(zones...); err != nil {
+		return nil, err
 	}
 	return a, nil
 }
 
-func (a *Authoritative) zoneFor(name string) *Zone {
-	for _, zone := range a.zones {
-		if withinZone(name, zone.origin) {
-			return zone
-		}
+// ReplaceZones replaces the complete zone set, not just matching origins.
+// Validation failure leaves the current set untouched. Each query uses one
+// snapshot throughout its lookup, including cross-zone CNAME chains.
+// With no arguments it removes all zones. Concurrent replacements are safe;
+// the last publication wins. Callers composing edits must coordinate them.
+func (a *Authoritative) ReplaceZones(zones ...*Zone) error {
+	snapshot, err := newZoneSnapshot(zones)
+	if err != nil {
+		return err
 	}
+	a.snapshot.Store(snapshot)
 	return nil
 }
 
 // Handle answers a single IN-class question. ANY, transfers, and OPT questions
 // are refused. Responses do not share mutable record data with the zone store.
+// DNS outcomes such as NXDOMAIN are normal responses, not Go errors.
 func (a *Authoritative) Handle(ctx context.Context, query dnsmessage.Message) (dnsmessage.Message, error) {
 	if err := ctx.Err(); err != nil {
 		return dnsmessage.Message{}, err
 	}
-	response := dnsmessage.Message{
-		Header: dnsmessage.Header{
-			ID: query.ID, Response: true, OpCode: query.OpCode,
-			RecursionDesired: query.RecursionDesired,
-		},
-		Questions: query.Questions,
+	name, code := validateQuestion(query)
+	response := dnsmessage.Message{Header: dnsmessage.Header{RCode: code}}
+	if code == dnsmessage.RCodeSuccess {
+		// Load exactly once so an update cannot mix zones within a query.
+		snapshot := a.snapshot.Load()
+		var err error
+		response, err = snapshot.lookup(ctx, name, query.Questions[0].Type)
+		if err != nil {
+			return dnsmessage.Message{}, err
+		}
 	}
-	if query.Response || len(query.Questions) != 1 {
-		response.RCode = dnsmessage.RCodeFormatError
+	response.ID = query.ID
+	response.Response = true
+	response.OpCode = query.OpCode
+	response.RecursionDesired = query.RecursionDesired
+	response.Questions = query.Questions
+	if code != dnsmessage.RCodeSuccess {
 		return response, nil
+	}
+	return copyMessage(response)
+}
+
+func validateQuestion(query dnsmessage.Message) (string, dnsmessage.RCode) {
+	if query.Response || len(query.Questions) != 1 {
+		return "", dnsmessage.RCodeFormatError
 	}
 	if query.OpCode != 0 {
-		response.RCode = dnsmessage.RCodeNotImplemented
-		return response, nil
+		return "", dnsmessage.RCodeNotImplemented
 	}
 	question := query.Questions[0]
-	if question.Class != dnsmessage.ClassINET || question.Type == dnsmessage.TypeALL ||
-		question.Type == dnsmessage.TypeOPT || question.Type == 251 || question.Type == 252 ||
-		question.Type == 253 || question.Type == 254 {
-		response.RCode = dnsmessage.RCodeRefused
-		return response, nil
+	switch question.Type {
+	case dnsmessage.TypeALL, dnsmessage.TypeOPT, 251, 252, 253, 254:
+		// ANY, OPT, IXFR, AXFR, MAILB, and MAILA are not ordinary lookups.
+		return "", dnsmessage.RCodeRefused
+	}
+	if question.Class != dnsmessage.ClassINET {
+		return "", dnsmessage.RCodeRefused
 	}
 	name, err := canonicalName(question.Name.String())
 	if err != nil {
-		response.RCode = dnsmessage.RCodeFormatError
-		return response, nil
+		return "", dnsmessage.RCodeFormatError
 	}
-	if a.zoneFor(name) == nil {
-		response.RCode = dnsmessage.RCodeRefused
-		return response, nil
-	}
-	response.Authoritative = true
-	visited := make(map[string]bool)
-	for links := 0; ; links++ {
-		if err := ctx.Err(); err != nil {
-			return dnsmessage.Message{}, err
-		}
-		zone := a.zoneFor(name)
-		if zone == nil {
-			// The alias leaves our authority. Its target is not resolved here.
-			break
-		}
-		if visited[name] {
-			response.RCode = dnsmessage.RCodeServerFailure
-			response.Answers = nil
-			break
-		}
-		visited[name] = true
-		sets := zone.records[name]
-		if records := sets[question.Type]; len(records) != 0 {
-			response.Answers = append(response.Answers, records...)
-			break
-		}
-		if aliases := sets[dnsmessage.TypeCNAME]; len(aliases) != 0 {
-			if links >= 16 {
-				response.RCode = dnsmessage.RCodeServerFailure
-				response.Answers = nil
-				break
-			}
-			response.Answers = append(response.Answers, aliases...)
-			name, err = canonicalName(aliases[0].Body.(*dnsmessage.CNAMEResource).CNAME.String())
-			if err != nil {
-				return dnsmessage.Message{}, err
-			}
-			continue
-		}
-		if _, exists := zone.names[name]; !exists {
-			response.RCode = dnsmessage.RCodeNameError
-		}
-		soa := zone.soa
-		soa.Header.TTL = min(soa.Header.TTL, soa.Body.(*dnsmessage.SOAResource).MinTTL)
-		response.Authorities = []dnsmessage.Resource{soa}
-		break
-	}
-	return copyMessage(response)
+	return name, dnsmessage.RCodeSuccess
 }

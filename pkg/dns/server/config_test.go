@@ -26,7 +26,7 @@ func TestConfigDefaults(t *testing.T) {
 			}
 			// Applying defaults repeatedly must not overwrite explicit values.
 			for range 2 {
-				if err := config.setDefaults(); err != nil {
+				if err := config.SetDefaults(); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -50,7 +50,7 @@ func TestConfigRejectsNegativeValues(t *testing.T) {
 		{"concurrency", Config{Concurrency: -1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.config.setDefaults(); err == nil {
+			if err := tc.config.SetDefaults(); err == nil {
 				t.Fatal("accepted negative value")
 			}
 		})

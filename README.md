@@ -64,6 +64,30 @@ DNSSEC, dynamic updates, EDNS negotiation, and hot reload are unsupported. Unkno
 ordinary query types use normal NODATA/NXDOMAIN behavior. The handler always
 advertises recursion as unavailable.
 
+### Updating zones while serving
+
+Keep the authoritative handler installed and replace its data:
+
+```go
+updated, err := dns.NewZone("home.arpa.", updatedRecords)
+if err != nil {
+    return err
+}
+return authority.ReplaceZones(updated) // Supply every zone to retain.
+```
+
+`ReplaceZones` validates the entire replacement before publishing it atomically.
+Failures leave the previous data live. Each query uses one immutable snapshot,
+including all steps of a cross-zone CNAME chain; in-flight queries can finish on
+the old snapshot while new queries see the replacement. Calling it without zones
+removes all authority. No server restart or callback replacement is needed.
+
+Concurrent replacements are safe, with the last publication winning. Applications
+composing edits must serialize them or implement revision checks to avoid lost
+updates. Do not copy an `Authoritative` after first use. There is no UI, file
+watcher, or persistence layer yet. DNS caches can retain previous positive and
+negative answers until their TTLs expire.
+
 All server settings are in `dnsserver.Config`, including the handler function:
 
 ```go
@@ -83,6 +107,14 @@ returns `REFUSED`. Handler errors become `SERVFAIL`. Malformed packets and packe
 marked as responses are dropped (TCP connections are closed). Unsupported opcodes
 receive `NOTIMP`; queries must contain exactly one question.
 
+The handler owns the response RCODE, AA/RA flags, and answer/authority/additional
+records. The transport restores the request ID, question, opcode, and RD flag,
+sets QR, and handles TCP framing and UDP truncation. Other handler flags are
+preserved. Handlers must not mutate the request's question slice or change their
+returned data after returning. DNS outcomes such as NXDOMAIN are returned as
+messages with a nil Go error; a Go error discards the handler's message and sends
+SERVFAIL instead.
+
 UDP responses are capped at 512 bytes, with oversized responses reduced to a
 truncated reply for TCP retry. TCP supports multiple sequential queries per
 connection, but not out-of-order pipelined processing. Defaults are a one-second
@@ -94,7 +126,7 @@ Handlers must honor cancellation; Go cannot forcibly terminate handler code.
 
 Each `Server` owns its concurrency limit and active workers. Only one `Serve`
 call may run on an instance at a time; overlapping calls return
-`dnsserver.ErrAlreadyServing` without closing their supplied listeners. Once
+an error without closing their supplied listeners. Once
 `Serve` returns and its workers have stopped, the instance can serve again.
 Do not copy a server after first use. Set `Config` before serving;
 live record changes belong in the handler's data, not the transport options.
