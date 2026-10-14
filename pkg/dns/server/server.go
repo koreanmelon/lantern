@@ -24,7 +24,7 @@ type Server struct {
 // same ephemeral port for both. It rejects overlapping serving calls.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	if !s.serving.CompareAndSwap(false, true) {
-		return errors.New("dnsserver: server is already serving")
+		return errors.New("server is already serving")
 	}
 	defer s.serving.Store(false)
 
@@ -33,17 +33,20 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 
 	var lc net.ListenConfig
-	tcp, err := lc.Listen(ctx, "tcp", s.Config.Address)
-	if err != nil {
-		return fmt.Errorf("listen DNS TCP: %w", err)
-	}
-	defer tcp.Close()
 
-	udp, err := lc.ListenPacket(ctx, "udp", tcp.Addr().String())
+	// UDP
+	udp, err := lc.ListenPacket(ctx, "udp", s.Config.Address)
 	if err != nil {
-		return fmt.Errorf("listen DNS UDP: %w", err)
+		return fmt.Errorf("failed to listen on UDP socket: %w", err)
 	}
 	defer udp.Close()
+
+	// TCP
+	tcp, err := lc.Listen(ctx, "tcp", s.Config.Address)
+	if err != nil {
+		return fmt.Errorf("failed to listen on TCP socket: %w", err)
+	}
+	defer tcp.Close()
 
 	return s.serve(ctx, udp, tcp)
 }
@@ -54,7 +57,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // Serve waits for active handlers to finish; handlers must honor cancellation.
 func (s *Server) Serve(ctx context.Context, udp net.PacketConn, tcp net.Listener) error {
 	if !s.serving.CompareAndSwap(false, true) {
-		return errors.New("dnsserver: server is already serving")
+		return errors.New("server is already serving")
 	}
 	defer s.serving.Store(false)
 
@@ -89,16 +92,15 @@ func (s *Server) serve(ctx context.Context, udp net.PacketConn, tcp net.Listener
 	})
 	defer stop()
 
-	errorsCh := make(chan error, 2)
-	go func() { errorsCh <- s.serveUDP(serveCtx, udp) }()
-	go func() { errorsCh <- s.serveTCP(serveCtx, tcp) }()
-	err := <-errorsCh
+	errors := make(chan error, 2)
+	go func() { errors <- s.serveUDP(serveCtx, udp) }()
+	go func() { errors <- s.serveTCP(serveCtx, tcp) }()
+	err := <-errors
 	cancel()
 
-	// Close synchronously as well, so both loops stop before waiting on workers.
 	udp.Close()
 	tcp.Close()
-	<-errorsCh
+	<-errors
 	s.workers.Wait()
 	if ctx.Err() != nil {
 		return nil
