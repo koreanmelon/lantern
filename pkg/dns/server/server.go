@@ -1,4 +1,4 @@
-package dns
+package dnsserver
 
 import (
 	"context"
@@ -13,8 +13,9 @@ import (
 
 // Server serves DNS over UDP and TCP. Its fields must not change while serving.
 type Server struct {
-	// A nil Handler refuses queries until resolution is configured.
-	Handler Handler
+	// Handler processes queries concurrently and must honor context cancellation.
+	// A nil handler refuses queries until resolution is configured.
+	Handler func(context.Context, dnsmessage.Message) (dnsmessage.Message, error)
 	// Timeout bounds each TCP I/O operation and handler invocation. Zero uses 5s.
 	Timeout time.Duration
 	// MaxConcurrent limits UDP requests and active TCP connections together.
@@ -23,7 +24,7 @@ type Server struct {
 }
 
 type state struct {
-	server  *Server
+	handler func(context.Context, dnsmessage.Message) (dnsmessage.Message, error)
 	timeout time.Duration
 	slots   chan struct{}
 	workers sync.WaitGroup
@@ -71,7 +72,7 @@ func (s *Server) Serve(ctx context.Context, udp net.PacketConn, tcp net.Listener
 	if limit == 0 {
 		limit = 128
 	}
-	st := state{server: s, timeout: timeout, slots: make(chan struct{}, limit)}
+	st := state{handler: s.Handler, timeout: timeout, slots: make(chan struct{}, limit)}
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(serveCtx, func() {
@@ -93,52 +94,4 @@ func (s *Server) Serve(ctx context.Context, udp net.PacketConn, tcp net.Listener
 		return nil
 	}
 	return err
-}
-
-func (s *state) response(ctx context.Context, packet []byte, udp bool) ([]byte, error) {
-	query, err := Parse(packet)
-	if err != nil {
-		return nil, err
-	}
-	if query.Response {
-		return nil, errors.New("received a DNS response, not a query")
-	}
-	var response dnsmessage.Message
-	switch {
-	case query.OpCode != 0:
-		response = reply(query, dnsmessage.RCodeNotImplemented)
-	case len(query.Questions) != 1:
-		response = reply(query, dnsmessage.RCodeFormatError)
-	case s.server.Handler == nil:
-		response = reply(query, dnsmessage.RCodeRefused)
-	default:
-		handlerCtx, cancel := context.WithTimeout(ctx, s.timeout)
-		defer cancel()
-		response, err = s.server.Handler.Handle(handlerCtx, query)
-		if err != nil {
-			response = reply(query, dnsmessage.RCodeServerFailure)
-		}
-	}
-	response.ID = query.ID
-	response.Response = true
-	response.OpCode = query.OpCode
-	response.RecursionDesired = query.RecursionDesired
-	response.Questions = query.Questions
-	encoded, err := response.Pack()
-	if err != nil {
-		return nil, err
-	}
-	// EDNS is not supported yet. Always respect the classic 512-byte UDP limit.
-	if udp && len(encoded) > 512 {
-		response.Truncated = true
-		response.Answers = nil
-		response.Authorities = nil
-		response.Additionals = nil
-		encoded, err = response.Pack()
-		if len(encoded) > 512 {
-			response.Questions = nil
-			encoded, err = response.Pack()
-		}
-	}
-	return encoded, err
 }

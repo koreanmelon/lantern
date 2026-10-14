@@ -55,7 +55,13 @@ func (a *Authoritative) Handle(ctx context.Context, query dnsmessage.Message) (d
 	if err := ctx.Err(); err != nil {
 		return dnsmessage.Message{}, err
 	}
-	response := reply(query, dnsmessage.RCodeSuccess)
+	response := dnsmessage.Message{
+		Header: dnsmessage.Header{
+			ID: query.ID, Response: true, OpCode: query.OpCode,
+			RecursionDesired: query.RecursionDesired,
+		},
+		Questions: query.Questions,
+	}
 	if query.Response || len(query.Questions) != 1 {
 		response.RCode = dnsmessage.RCodeFormatError
 		return response, nil

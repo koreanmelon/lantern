@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/koreanmelon/lantern/pkg/dns"
+	"github.com/koreanmelon/lantern/pkg/dns/server"
 	"github.com/spf13/cobra"
 )
 
@@ -31,10 +31,10 @@ func serveDNS(ctx context.Context, address string) error {
 	if err != nil {
 		return err
 	}
-	server := dns.Server{
-		Handler:       handler,
+	s := dnsserver.Server{
+		Handler:       handler.Handle,
 		Timeout:       10 * time.Second,
 		MaxConcurrent: 10,
 	}
-	return server.ListenAndServe(ctx, address)
+	return s.ListenAndServe(ctx, address)
 }

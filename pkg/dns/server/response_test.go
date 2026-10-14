@@ -1,4 +1,4 @@
-package dns
+package dnsserver
 
 import (
 	"context"
@@ -25,15 +25,15 @@ func TestResponseCodes(t *testing.T) {
 		name       string
 		opcode     dnsmessage.OpCode
 		noQuestion bool
-		handler    Handler
+		handler    func(context.Context, dnsmessage.Message) (dnsmessage.Message, error)
 		code       dnsmessage.RCode
 	}{
 		{name: "default refused", code: dnsmessage.RCodeRefused},
 		{name: "unsupported opcode", opcode: 2, code: dnsmessage.RCodeNotImplemented},
 		{name: "missing question", noQuestion: true, code: dnsmessage.RCodeFormatError},
-		{name: "handler error", handler: HandlerFunc(func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
+		{name: "handler error", handler: func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
 			return dnsmessage.Message{}, errors.New("failed")
-		}), code: dnsmessage.RCodeServerFailure},
+		}, code: dnsmessage.RCodeServerFailure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			query := testQuery(t)
@@ -45,13 +45,13 @@ func TestResponseCodes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r := state{server: &Server{Handler: tc.handler}, timeout: time.Second}
+			r := state{handler: tc.handler, timeout: time.Second}
 			encoded, err := r.response(t.Context(), packet, true)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := Parse(encoded)
-			if err != nil {
+			var got dnsmessage.Message
+			if err := got.Unpack(encoded); err != nil {
 				t.Fatal(err)
 			}
 			if got.RCode != tc.code || got.ID != query.ID || !got.Response ||
@@ -68,25 +68,24 @@ func TestResponseTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := state{timeout: time.Second, server: &Server{Handler: HandlerFunc(
-		func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
-			response := reply(query, dnsmessage.RCodeSuccess)
-			for range 100 {
-				response.Answers = append(response.Answers, dnsmessage.Resource{
-					Header: dnsmessage.ResourceHeader{Name: query.Questions[0].Name, Class: dnsmessage.ClassINET, TTL: 60},
-					Body:   &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}},
-				})
-			}
-			return response, nil
-		}),
-	}}
+	r := state{timeout: time.Second, handler: func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
+		var response dnsmessage.Message
+		for range 100 {
+			response.Answers = append(response.Answers, dnsmessage.Resource{
+				Header: dnsmessage.ResourceHeader{Name: query.Questions[0].Name, Class: dnsmessage.ClassINET, TTL: 60},
+				Body:   &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}},
+			})
+		}
+		return response, nil
+	},
+	}
 	for _, udp := range []bool{true, false} {
 		encoded, err := r.response(t.Context(), packet, udp)
 		if err != nil {
 			t.Fatal(err)
 		}
-		message, err := Parse(encoded)
-		if err != nil {
+		var message dnsmessage.Message
+		if err := message.Unpack(encoded); err != nil {
 			t.Fatal(err)
 		}
 		if udp {
@@ -100,9 +99,21 @@ func TestResponseTruncation(t *testing.T) {
 }
 
 func TestResponseRejectsInvalidInput(t *testing.T) {
-	r := state{server: &Server{}, timeout: time.Second}
-	if _, err := r.response(t.Context(), []byte{1}, true); err == nil {
-		t.Fatal("accepted malformed packet")
+	r := state{timeout: time.Second}
+	for _, tc := range []struct {
+		name   string
+		packet []byte
+	}{
+		{"empty", nil},
+		{"short header", make([]byte, 11)},
+		{"missing question", []byte{0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0}},
+		{"pointer loop", []byte{0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xc0, 0x0c, 0, 1, 0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := r.response(t.Context(), tc.packet, true); err == nil {
+				t.Fatal("accepted malformed packet")
+			}
+		})
 	}
 	query := testQuery(t)
 	query.Response = true
@@ -113,4 +124,32 @@ func TestResponseRejectsInvalidInput(t *testing.T) {
 	if _, err := r.response(t.Context(), packet, true); err == nil {
 		t.Fatal("answered a response packet")
 	}
+}
+
+func FuzzResponse(f *testing.F) {
+	f.Add([]byte{})
+	f.Add(make([]byte, 12))
+	f.Add([]byte{0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xc0, 0x0c, 0, 1, 0, 1})
+	query := dnsmessage.Message{
+		Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName("example.com."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+	}
+	packet, err := query.Pack()
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(packet)
+	f.Fuzz(func(t *testing.T, packet []byte) {
+		s := state{timeout: time.Second}
+		response, err := s.response(t.Context(), packet, true)
+		if err != nil {
+			return
+		}
+		var message dnsmessage.Message
+		if err := message.Unpack(response); err != nil {
+			t.Fatalf("invalid response: %v", err)
+		}
+		if !message.Response || len(response) > 512 {
+			t.Fatal("invalid UDP response envelope")
+		}
+	})
 }

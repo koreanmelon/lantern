@@ -1,6 +1,6 @@
 //go:build integration
 
-package dns
+package integration
 
 import (
 	"context"
@@ -13,14 +13,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/koreanmelon/lantern/pkg/dns"
+	dnsserver "github.com/koreanmelon/lantern/pkg/dns/server"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-func startTestServer(t *testing.T, server *Server) (string, context.CancelFunc, <-chan error) {
+func startTestServer(t *testing.T, s *dnsserver.Server) (string, context.CancelFunc) {
 	t.Helper()
 	var tcp net.Listener
 	var udp net.PacketConn
-	for attempt := 0; attempt < 20; attempt++ {
+	for range 20 {
 		var err error
 		tcp, err = net.Listen("tcp4", "127.0.0.1:0")
 		if err != nil {
@@ -40,7 +42,7 @@ func startTestServer(t *testing.T, server *Server) (string, context.CancelFunc, 
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- server.Serve(ctx, udp, tcp) }()
+	go func() { done <- s.Serve(ctx, udp, tcp) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -52,11 +54,11 @@ func startTestServer(t *testing.T, server *Server) (string, context.CancelFunc, 
 			t.Error("server failed to stop")
 		}
 	})
-	return tcp.Addr().String(), cancel, done
+	return tcp.Addr().String(), cancel
 }
 
 func TestAuthoritativeTransports(t *testing.T) {
-	handler, err := NewAuthoritative(newTestZone(t, "home.arpa.",
+	handler, err := dns.NewAuthoritative(newTestZone(t, "home.arpa.",
 		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}),
 		record("large.home.arpa.", dnsmessage.TypeTXT, &dnsmessage.TXTResource{TXT: []string{
 			strings.Repeat("a", 250), strings.Repeat("b", 250), strings.Repeat("c", 250),
@@ -65,7 +67,7 @@ func TestAuthoritativeTransports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	address, _, _ := startTestServer(t, &Server{Handler: handler})
+	address, _ := startTestServer(t, &dnsserver.Server{Handler: handler.Handle})
 	for _, network := range []string{"udp", "tcp"} {
 		for _, tc := range []struct {
 			name    string
@@ -79,7 +81,17 @@ func TestAuthoritativeTransports(t *testing.T) {
 			{"large.home.arpa.", dnsmessage.TypeTXT, dnsmessage.RCodeSuccess, 1},
 		} {
 			t.Run(network+"/"+tc.name+"/"+tc.typ.String(), func(t *testing.T) {
-				query := dnsmessage.Message{Header: dnsmessage.Header{ID: 42, RecursionDesired: true}, Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(tc.name), Type: tc.typ, Class: dnsmessage.ClassINET}}}
+				query := dnsmessage.Message{
+					ID:               42,
+					RecursionDesired: true,
+					Questions: []dnsmessage.Question{
+						{
+							Name:  dnsmessage.MustNewName(tc.name),
+							Type:  tc.typ,
+							Class: dnsmessage.ClassINET,
+						},
+					},
+				}
 				packet, err := query.Pack()
 				if err != nil {
 					t.Fatal(err)
@@ -116,8 +128,8 @@ func TestAuthoritativeTransports(t *testing.T) {
 					}
 					packet = packet[:n]
 				}
-				response, err := Parse(packet)
-				if err != nil {
+				var response dnsmessage.Message
+				if err := response.Unpack(packet); err != nil {
 					t.Fatal(err)
 				}
 				if response.ID != 42 || !response.Authoritative || response.RecursionAvailable || response.RCode != tc.code {
@@ -139,7 +151,7 @@ func TestAuthoritativeTransports(t *testing.T) {
 }
 
 func TestServerTransports(t *testing.T) {
-	address, _, _ := startTestServer(t, &Server{})
+	address, _ := startTestServer(t, &dnsserver.Server{})
 	for _, network := range []string{"udp", "tcp"} {
 		t.Run(network, func(t *testing.T) {
 			conn, err := net.Dial(network, address)
@@ -186,8 +198,8 @@ func TestServerTransports(t *testing.T) {
 					}
 					response = response[:n]
 				}
-				message, err := Parse(response)
-				if err != nil {
+				var message dnsmessage.Message
+				if err := message.Unpack(response); err != nil {
 					t.Fatal(err)
 				}
 				if message.ID != query.ID || !message.Response || message.RCode != dnsmessage.RCodeRefused {
@@ -199,7 +211,7 @@ func TestServerTransports(t *testing.T) {
 }
 
 func TestServerShutdownClosesIdleTCP(t *testing.T) {
-	address, cancel, _ := startTestServer(t, &Server{Timeout: time.Minute})
+	address, cancel := startTestServer(t, &dnsserver.Server{Timeout: time.Minute})
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		t.Fatal(err)
@@ -222,13 +234,13 @@ func TestServerShutdownClosesIdleTCP(t *testing.T) {
 func TestServerCancelsActiveHandler(t *testing.T) {
 	started := make(chan struct{})
 	finished := make(chan struct{})
-	server := &Server{Handler: HandlerFunc(func(ctx context.Context, query dnsmessage.Message) (dnsmessage.Message, error) {
+	s := &dnsserver.Server{Handler: func(ctx context.Context, query dnsmessage.Message) (dnsmessage.Message, error) {
 		close(started)
 		<-ctx.Done()
 		close(finished)
 		return dnsmessage.Message{}, ctx.Err()
-	})}
-	address, cancel, _ := startTestServer(t, server)
+	}}
+	address, cancel := startTestServer(t, s)
 	conn, err := net.Dial("udp", address)
 	if err != nil {
 		t.Fatal(err)
@@ -256,14 +268,14 @@ func TestServerCancelsActiveHandler(t *testing.T) {
 }
 
 func TestServeClosesPartiallyProvidedListeners(t *testing.T) {
-	server := &Server{}
+	s := &dnsserver.Server{}
 	t.Run("UDP only", func(t *testing.T) {
 		udp, err := net.ListenPacket("udp4", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer udp.Close()
-		if err := server.Serve(t.Context(), udp, nil); err == nil {
+		if err := s.Serve(t.Context(), udp, nil); err == nil {
 			t.Fatal("expected error")
 		}
 		if _, _, err := udp.ReadFrom(make([]byte, 1)); err == nil {
@@ -276,7 +288,7 @@ func TestServeClosesPartiallyProvidedListeners(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer tcp.Close()
-		if err := server.Serve(t.Context(), nil, tcp); err == nil {
+		if err := s.Serve(t.Context(), nil, tcp); err == nil {
 			t.Fatal("expected error")
 		}
 		if _, err := tcp.Accept(); err == nil {

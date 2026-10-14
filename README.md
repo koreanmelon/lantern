@@ -34,8 +34,10 @@ LAN address is explicit; do not expose the service to the public internet.
 ## Structure
 
 - `cmd/lantern`: process startup and shutdown; eventually wires DNS and DHCP.
-- `pkg/dns`: DNS codec wrapper, validated immutable zones, authoritative handler,
-  and UDP/TCP server.
+- `pkg/dns`: validated immutable zones and authoritative answers.
+- `pkg/dns/server`: UDP/TCP transport and request processing, using
+  `dnsmessage.Message.Unpack` directly (package name `dnsserver`).
+- `tests/integration`: black-box socket tests, built with the `integration` tag.
 
 ## Zones
 
@@ -51,7 +53,7 @@ construction, and responses do not expose mutable storage. Queries match names
 case-insensitively, preserving the original question. Identical duplicate records
 should be avoided; they are not deduplicated automatically.
 
-`dns.NewAuthoritative(zones...)` implements `dns.Handler`. The most specific zone
+`dns.NewAuthoritative(zones...)` returns an authoritative answerer. The most specific zone
 wins when origins overlap. Intermediate names with descendants exist even if they
 have no records. Negative SOA TTLs use the lesser of the SOA TTL and its MinTTL.
 CNAME chains are followed within configured zones up to 16 links; loops or longer
@@ -62,7 +64,18 @@ DNSSEC, dynamic updates, EDNS negotiation, and hot reload are unsupported. Unkno
 ordinary query types use normal NODATA/NXDOMAIN behavior. The handler always
 advertises recursion as unavailable.
 
-`dns.Server` accepts a concurrent, cancellation-aware `dns.Handler`. A nil handler
+`dnsserver.Server` accepts a function in its `Handler` field:
+
+```go
+authority, err := dns.NewAuthoritative(zone)
+if err != nil {
+    return err
+}
+s := dnsserver.Server{Handler: authority.Handle}
+return s.ListenAndServe(ctx, "127.0.0.1:1053")
+```
+
+The function must be safe for concurrent calls and honor cancellation. A nil handler
 returns `REFUSED`. Handler errors become `SERVFAIL`. Malformed packets and packets
 marked as responses are dropped (TCP connections are closed). Unsupported opcodes
 receive `NOTIMP`; queries must contain exactly one question.
@@ -78,8 +91,11 @@ Handlers must honor cancellation; Go cannot forcibly terminate handler code.
 
 ```sh
 go test -race ./...
-go test -race -tags=integration ./...
+go test -race -tags=integration ./tests/integration/...
 go vet ./...
 ```
 
-Integration tests bind ephemeral loopback ports; no external DNS is needed.
+Integration tests are in the external `integration_test` package and use only
+public APIs. They bind ephemeral loopback ports; no external DNS is needed.
+Unit tests remain alongside the code they test. To run both suites together, use
+`go test -race -tags=integration ./...`.
