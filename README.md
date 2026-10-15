@@ -34,7 +34,7 @@ LAN address is explicit; do not expose the service to the public internet.
 ## Structure
 
 - `cmd/lantern`: process startup and shutdown; eventually wires DNS and DHCP.
-- `pkg/dns/zone`: validated immutable zones, zone handler, and record lookup.
+- `pkg/dns/zone`: validated read-only zone data, zone handler, and record lookup.
 - `pkg/dns/server`: UDP/TCP transport and request processing, using
   `dnsmessage.Message.Unpack` directly (package name `dnsserver`).
 - `tests/integration`: black-box socket tests, built with the `integration` tag.
@@ -48,10 +48,15 @@ SRV, and PTR. PTR records for reverse resolution belong in the appropriate
 `in-addr.arpa.` or `ip6.arpa.` zone.
 
 Construction validates ownership, body/type agreement, RRset TTL consistency,
-CNAME exclusivity, and locally known NS/MX/SRV targets. Zone data is copied at
-construction, and responses do not expose mutable storage. Queries match names
-case-insensitively, preserving the original question. Identical duplicate records
-should be avoided; they are not deduplicated automatically.
+CNAME exclusivity, and NS/MX/SRV targets that alias another name in the same zone.
+Relationships between different zones are not validated. Record bodies and their
+nested slices are not deep-copied at construction or when answering queries.
+Callers must treat supplied record data and returned records as read-only.
+Do not call `Zone.Add` after installing the zone in a handler; its mutex protects
+zone replacement and lookups, not mutations through external references. Build a
+replacement zone instead. Wire-format validation is retained during construction.
+Queries match names case-insensitively, preserving the original question.
+Identical duplicate records should be avoided; they are not deduplicated automatically.
 
 `zone.NewZoneHandler(zones...)` returns a handler for configured zones. The most specific zone
 wins when origins overlap. Intermediate names with descendants exist even if they
@@ -78,11 +83,11 @@ return authority.ReplaceZones(updated) // Supply every zone to retain.
 
 `ReplaceZones` validates and copies the replacement zone slice before acquiring
 a write lock to install it. Failures leave the previous data live. Queries hold
-a read lock for their complete lookup and response copying, including all steps
+a read lock for their complete lookup, including all steps
 of a cross-zone CNAME chain, so they cannot mix old and new zone data. Updates
 wait for active readers, and pending writers can delay new queries. Calling it
 without zones removes all authority. No server restart or callback replacement
-is needed. Individual `Zone` values remain immutable.
+is needed. Installed zones and their borrowed record data must remain read-only.
 
 Concurrent replacements are safe, with the last assignment winning. Applications
 composing edits must serialize them or implement revision checks to avoid lost

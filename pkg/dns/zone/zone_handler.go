@@ -8,8 +8,9 @@ import (
 )
 
 // ZoneHandler answers only from its configured zones, without recursion or
-// forwarding. It is safe for concurrent queries and zone replacement. Its zero
-// value refuses all queries. It must not be copied after first use.
+// forwarding. It is safe for concurrent queries and zone replacement provided
+// installed zones and their record data remain read-only. Its zero value refuses
+// all queries. It must not be copied after first use.
 type ZoneHandler struct {
 	mu    sync.RWMutex
 	zones []*Zone
@@ -26,7 +27,8 @@ func NewZoneHandler(zones ...*Zone) (*ZoneHandler, error) {
 
 // ReplaceZones replaces the complete zone set, not just matching origins.
 // Validation failure leaves the current set untouched. Queries hold a read lock
-// throughout lookup and response copying, including cross-zone CNAME chains.
+// throughout lookup, including cross-zone CNAME chains. Installed zones and
+// their record data must not be mutated.
 // With no arguments it removes all zones. Concurrent replacements are safe;
 // the last assignment wins. Callers composing edits must coordinate them.
 func (h *ZoneHandler) ReplaceZones(zones ...*Zone) error {
@@ -41,7 +43,8 @@ func (h *ZoneHandler) ReplaceZones(zones ...*Zone) error {
 }
 
 // Handle answers a single IN-class question. ANY, transfers, and OPT questions
-// are refused. Responses do not share mutable record data with the zone store.
+// are refused. Responses may share resource bodies with the zone store; callers
+// must treat returned records as read-only and must not mutate the query's data.
 // DNS outcomes such as NXDOMAIN are normal responses, not Go errors.
 func (h *ZoneHandler) Handle(ctx context.Context, query dnsmessage.Message) (dnsmessage.Message, error) {
 	if err := ctx.Err(); err != nil {
@@ -63,10 +66,7 @@ func (h *ZoneHandler) Handle(ctx context.Context, query dnsmessage.Message) (dns
 	response.OpCode = query.OpCode
 	response.RecursionDesired = query.RecursionDesired
 	response.Questions = query.Questions
-	if code != dnsmessage.RCodeSuccess {
-		return response, nil
-	}
-	return copyMessage(response)
+	return response, nil
 }
 
 func validateQuestion(query dnsmessage.Message) (string, dnsmessage.RCode) {
@@ -85,7 +85,7 @@ func validateQuestion(query dnsmessage.Message) (string, dnsmessage.RCode) {
 	if question.Class != dnsmessage.ClassINET {
 		return "", dnsmessage.RCodeRefused
 	}
-	name, err := canonicalName(question.Name.String())
+	name, err := fqdn(question.Name.String())
 	if err != nil {
 		return "", dnsmessage.RCodeFormatError
 	}

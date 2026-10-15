@@ -67,6 +67,9 @@ func TestNewZoneValidation(t *testing.T) {
 		{"CNAME conflict reversed", func(r []dnsmessage.Resource) []dnsmessage.Resource {
 			return append(r, record("a.home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("b.home.arpa.")}), record("a.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{}))
 		}},
+		{"CNAME conflict case insensitive", func(r []dnsmessage.Resource) []dnsmessage.Resource {
+			return append(r, record("A.Home.ARPA.", dnsmessage.TypeTXT, &dnsmessage.TXTResource{TXT: []string{"value"}}), record("a.home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("b.home.arpa.")}))
+		}},
 		{"multiple CNAMEs", func(r []dnsmessage.Resource) []dnsmessage.Resource {
 			c := record("a.home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("b.home.arpa.")})
 			return append(r, c, c)
@@ -123,4 +126,47 @@ func TestZoneRejectsAliasTargets(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestRecordKeyIndex(t *testing.T) {
+	z := newTestZone(t, "home.arpa.",
+		record("APP.Home.ARPA.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}),
+		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 2}}),
+		record("app.home.arpa.", dnsmessage.TypeAAAA, &dnsmessage.AAAAResource{AAAA: [16]byte{0x20, 1, 0x0d, 0xb8}}),
+		record("app.home.arpa.", dnsmessage.TypeTXT, &dnsmessage.TXTResource{TXT: []string{"app"}}),
+		record("other.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 3}}),
+	)
+	for _, tc := range []struct {
+		name  string
+		typ   dnsmessage.Type
+		count int
+	}{
+		{"app.home.arpa.", dnsmessage.TypeA, 2},
+		{"app.home.arpa.", dnsmessage.TypeAAAA, 1},
+		{"app.home.arpa.", dnsmessage.TypeTXT, 1},
+		{"other.home.arpa.", dnsmessage.TypeA, 1},
+		{"other.home.arpa.", dnsmessage.TypeAAAA, 0},
+	} {
+		t.Run(fmt.Sprintf("%s/%d", tc.name, tc.typ), func(t *testing.T) {
+			records := z.records[RecordKey{name: tc.name, typ: tc.typ}]
+			if len(records) != tc.count {
+				t.Fatalf("got %d records, want %d", len(records), tc.count)
+			}
+			for _, record := range records {
+				owner, err := fqdn(record.Header.Name.String())
+				if err != nil || owner != tc.name || record.Header.Type != tc.typ {
+					t.Fatal("RRset contains a record with a different key")
+				}
+			}
+		})
+	}
+}
+
+func TestCNAMECanHaveDescendants(t *testing.T) {
+	// An intermediate name's presence in the name index does not mean it owns
+	// any records. CNAME exclusivity concerns only records at the same owner.
+	newTestZone(t, "home.arpa.",
+		record("child.alias.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{}),
+		record("alias.home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("target.home.arpa.")}),
+	)
 }

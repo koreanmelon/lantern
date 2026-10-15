@@ -19,7 +19,7 @@ func TestReplaceZones(t *testing.T) {
 	if err := authority.ReplaceZones(old); err != nil {
 		t.Fatal(err)
 	}
-	// Returned records remain independent of later updates.
+	// Replacing a zone does not change previously returned read-only records.
 	previous := ask(t, &authority, "app.home.arpa.", dnsmessage.TypeA)
 	input := []*Zone{next}
 	if err := authority.ReplaceZones(input...); err != nil {
@@ -67,21 +67,21 @@ func TestReplaceZones(t *testing.T) {
 	}
 }
 
-func TestReplaceZonesRejectsInvalidCrossZoneTargets(t *testing.T) {
+func TestReplaceZonesValidatesZonesIndependently(t *testing.T) {
 	mail := newTestZone(t, "mail.arpa.", record("mail.arpa.", dnsmessage.TypeMX, &dnsmessage.MXResource{MX: dnsmessage.MustNewName("alias.home.arpa.")}))
 	authority, err := NewZoneHandler(mail)
 	if err != nil {
 		t.Fatal(err)
 	}
 	aliases := newTestZone(t, "home.arpa.", record("alias.home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("real.home.arpa.")}))
-	if err := authority.ReplaceZones(mail, aliases); err == nil {
-		t.Fatal("accepted cross-zone alias target")
+	if err := authority.ReplaceZones(mail, aliases); err != nil {
+		t.Fatalf("individually valid zones were rejected: %v", err)
 	}
-	if got := ask(t, authority, "alias.home.arpa.", dnsmessage.TypeA); got.RCode != dnsmessage.RCodeRefused {
-		t.Fatal("invalid zone set was installed")
+	if got := ask(t, authority, "alias.home.arpa.", dnsmessage.TypeCNAME); len(got.Answers) != 1 {
+		t.Fatal("replacement did not install the new zone")
 	}
 	if got := ask(t, authority, "mail.arpa.", dnsmessage.TypeMX); len(got.Answers) != 1 {
-		t.Fatal("invalid replacement removed existing records")
+		t.Fatal("replacement removed the retained zone's records")
 	}
 }
 

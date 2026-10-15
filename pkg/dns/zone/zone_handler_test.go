@@ -121,7 +121,7 @@ func TestZoneHandlerCNAME(t *testing.T) {
 	}
 }
 
-func TestZoneHandlerRecordTypesAndIsolation(t *testing.T) {
+func TestZoneHandlerRecordTypes(t *testing.T) {
 	txt := &dnsmessage.TXTResource{TXT: []string{"hello", "world"}}
 	z := newTestZone(t, "home.arpa.",
 		record("app.home.arpa.", dnsmessage.TypeTXT, txt),
@@ -129,7 +129,6 @@ func TestZoneHandlerRecordTypesAndIsolation(t *testing.T) {
 		record("_web._tcp.home.arpa.", dnsmessage.TypeSRV, &dnsmessage.SRVResource{Priority: 1, Weight: 2, Port: 443, Target: dnsmessage.MustNewName("app.home.arpa.")}),
 		record("ptr.home.arpa.", dnsmessage.TypePTR, &dnsmessage.PTRResource{PTR: dnsmessage.MustNewName("app.home.arpa.")}),
 	)
-	txt.TXT[0] = "mutated input"
 	handler, err := NewZoneHandler(z)
 	if err != nil {
 		t.Fatal(err)
@@ -150,14 +149,8 @@ func TestZoneHandlerRecordTypesAndIsolation(t *testing.T) {
 	}
 	got := ask(t, handler, "app.home.arpa.", dnsmessage.TypeTXT)
 	body := got.Answers[0].Body.(*dnsmessage.TXTResource)
-	if body.TXT[0] != "hello" {
-		t.Fatal("zone aliases constructor input")
-	}
-	body.TXT[0] = "mutated output"
-	got.Answers[0].Header.TTL = 1
-	again := ask(t, handler, "app.home.arpa.", dnsmessage.TypeTXT)
-	if again.Answers[0].Body.(*dnsmessage.TXTResource).TXT[0] != "hello" || again.Answers[0].Header.TTL != 300 {
-		t.Fatal("zone aliases returned response")
+	if body != txt || len(body.TXT) != 2 || body.TXT[0] != "hello" || body.TXT[1] != "world" || got.Answers[0].Header.TTL != 300 {
+		t.Fatal("TXT record was cloned or its contents were changed")
 	}
 }
 
@@ -216,10 +209,6 @@ func TestZoneHandlerCrossZoneCNAME(t *testing.T) {
 		t.Fatal("cross-zone alias did not resolve")
 	}
 
-	mail := newTestZone(t, "mail.arpa.", record("mail.arpa.", dnsmessage.TypeMX, &dnsmessage.MXResource{MX: dnsmessage.MustNewName("alias.home.arpa.")}))
-	if _, err := NewZoneHandler(mail, parent); err == nil {
-		t.Fatal("accepted cross-zone MX alias")
-	}
 }
 
 func TestZoneHandlerNegativeTTL(t *testing.T) {

@@ -23,20 +23,12 @@ func prepareZones(zones []*Zone) ([]*Zone, error) {
 	sort.Slice(zones, func(i, j int) bool {
 		return len(zones[i].origin) > len(zones[j].origin)
 	})
-	for _, zone := range zones {
-		if err := zone.validateTargets(func(name string) bool {
-			targetZone := zoneFor(zones, name)
-			return targetZone != nil && len(targetZone.records[name][dnsmessage.TypeCNAME]) != 0
-		}); err != nil {
-			return nil, err
-		}
-	}
 	return zones, nil
 }
 
 func zoneFor(zones []*Zone, name string) *Zone {
 	for _, zone := range zones {
-		if withinZone(name, zone.origin) {
+		if zone.Has(name) {
 			return zone
 		}
 	}
@@ -64,12 +56,11 @@ func lookup(ctx context.Context, zones []*Zone, name string, typ dnsmessage.Type
 			return response, nil
 		}
 		visited[name] = true
-		sets := zone.records[name]
-		if records := sets[typ]; len(records) != 0 {
+		if records := zone.records[RecordKey{name: name, typ: typ}]; len(records) != 0 {
 			response.Answers = append(response.Answers, records...)
 			return response, nil
 		}
-		aliases := sets[dnsmessage.TypeCNAME]
+		aliases := zone.records[RecordKey{name: name, typ: dnsmessage.TypeCNAME}]
 		if len(aliases) == 0 {
 			zone.setNegativeAnswer(name, &response)
 			return response, nil
@@ -81,7 +72,7 @@ func lookup(ctx context.Context, zones []*Zone, name string, typ dnsmessage.Type
 		}
 		response.Answers = append(response.Answers, aliases...)
 		var err error
-		name, err = canonicalName(aliases[0].Body.(*dnsmessage.CNAMEResource).CNAME.String())
+		name, err = fqdn(aliases[0].Body.(*dnsmessage.CNAMEResource).CNAME.String())
 		if err != nil {
 			return dnsmessage.Message{}, err
 		}
@@ -89,7 +80,7 @@ func lookup(ctx context.Context, zones []*Zone, name string, typ dnsmessage.Type
 }
 
 func (z *Zone) setNegativeAnswer(name string, response *dnsmessage.Message) {
-	if _, exists := z.names[name]; !exists {
+	if !z.names[name] {
 		response.RCode = dnsmessage.RCodeNameError
 	}
 	soa := z.soa
