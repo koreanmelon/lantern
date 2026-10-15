@@ -3,7 +3,7 @@ package zone
 import (
 	"context"
 
-	"github.com/koreanmelon/lantern/pkg/dns/server"
+	dnsserver "github.com/koreanmelon/lantern/pkg/dns/server"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
