@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/koreanmelon/lantern/pkg/dns"
 	"github.com/koreanmelon/lantern/pkg/dns/server"
+	"github.com/koreanmelon/lantern/pkg/dns/zone"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -20,7 +20,7 @@ func TestLiveZoneReplacement(t *testing.T) {
 		t.Run(network, func(t *testing.T) {
 			old := newTestZone(t, "home.arpa.", record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}))
 			next := newTestZone(t, "home.arpa.", record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 2}}))
-			authority, err := dns.NewAuthoritative(old)
+			authority, err := zone.NewZoneHandler(old)
 			if err != nil {
 				t.Fatal(err)
 			}

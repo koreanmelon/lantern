@@ -1,4 +1,4 @@
-package dns
+package zone
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-func ask(t *testing.T, handler *Authoritative, name string, typ dnsmessage.Type) dnsmessage.Message {
+func ask(t *testing.T, handler *ZoneHandler, name string, typ dnsmessage.Type) dnsmessage.Message {
 	t.Helper()
 	query := dnsmessage.Message{
 		Header:    dnsmessage.Header{ID: 42, RecursionDesired: true},
@@ -25,13 +25,13 @@ func ask(t *testing.T, handler *Authoritative, name string, typ dnsmessage.Type)
 	return response
 }
 
-func TestAuthoritativeLookup(t *testing.T) {
+func TestZoneHandlerLookup(t *testing.T) {
 	z := newTestZone(t, "home.arpa.",
 		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}),
 		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 2}}),
 		record("api.apps.home.arpa.", dnsmessage.TypeAAAA, &dnsmessage.AAAAResource{AAAA: [16]byte{0x20, 1, 0xd, 0xb8}}),
 	)
-	handler, err := NewAuthoritative(z)
+	handler, err := NewZoneHandler(z)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestAuthoritativeLookup(t *testing.T) {
 	}
 }
 
-func TestAuthoritativeCNAME(t *testing.T) {
+func TestZoneHandlerCNAME(t *testing.T) {
 	alias := func(name, target string) dnsmessage.Resource {
 		return record(name+".home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName(target)})
 	}
@@ -90,7 +90,7 @@ func TestAuthoritativeCNAME(t *testing.T) {
 		extra = append(extra, alias(fmt.Sprintf("long%d", i), fmt.Sprintf("long%d.home.arpa.", i+1)))
 	}
 	extra = append(extra, record("long18.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{}))
-	handler, err := NewAuthoritative(newTestZone(t, "home.arpa.", extra...))
+	handler, err := NewZoneHandler(newTestZone(t, "home.arpa.", extra...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestAuthoritativeCNAME(t *testing.T) {
 	}
 }
 
-func TestAuthoritativeRecordTypesAndIsolation(t *testing.T) {
+func TestZoneHandlerRecordTypesAndIsolation(t *testing.T) {
 	txt := &dnsmessage.TXTResource{TXT: []string{"hello", "world"}}
 	z := newTestZone(t, "home.arpa.",
 		record("app.home.arpa.", dnsmessage.TypeTXT, txt),
@@ -130,7 +130,7 @@ func TestAuthoritativeRecordTypesAndIsolation(t *testing.T) {
 		record("ptr.home.arpa.", dnsmessage.TypePTR, &dnsmessage.PTRResource{PTR: dnsmessage.MustNewName("app.home.arpa.")}),
 	)
 	txt.TXT[0] = "mutated input"
-	handler, err := NewAuthoritative(z)
+	handler, err := NewZoneHandler(z)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,10 +161,10 @@ func TestAuthoritativeRecordTypesAndIsolation(t *testing.T) {
 	}
 }
 
-func TestAuthoritativeMultipleZones(t *testing.T) {
+func TestZoneHandlerMultipleZones(t *testing.T) {
 	parent := newTestZone(t, "home.arpa.", record("app.child.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}))
 	child := newTestZone(t, "child.home.arpa.", record("app.child.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 2}}))
-	handler, err := NewAuthoritative(parent, child)
+	handler, err := NewZoneHandler(parent, child)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,19 +172,19 @@ func TestAuthoritativeMultipleZones(t *testing.T) {
 	if got.Answers[0].Body.(*dnsmessage.AResource).A[3] != 2 {
 		t.Fatal("did not select child zone")
 	}
-	if _, err := NewAuthoritative(parent, parent); err == nil {
+	if _, err := NewZoneHandler(parent, parent); err == nil {
 		t.Fatal("accepted duplicate zones")
 	}
-	if _, err := NewAuthoritative(nil); err == nil {
+	if _, err := NewZoneHandler(nil); err == nil {
 		t.Fatal("accepted nil zone")
 	}
-	if _, err := NewAuthoritative(&Zone{}); err == nil {
+	if _, err := NewZoneHandler(&Zone{}); err == nil {
 		t.Fatal("accepted uninitialized zone")
 	}
 }
 
-func TestAuthoritativeCancellationAndValidation(t *testing.T) {
-	handler, err := NewAuthoritative(newTestZone(t, "home.arpa."))
+func TestZoneHandlerCancellationAndValidation(t *testing.T) {
+	handler, err := NewZoneHandler(newTestZone(t, "home.arpa."))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,10 +204,10 @@ func TestAuthoritativeCancellationAndValidation(t *testing.T) {
 	}
 }
 
-func TestAuthoritativeCrossZoneCNAME(t *testing.T) {
+func TestZoneHandlerCrossZoneCNAME(t *testing.T) {
 	parent := newTestZone(t, "home.arpa.", record("alias.home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("app.other.arpa.")}))
 	other := newTestZone(t, "other.arpa.", record("app.other.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 5}}))
-	handler, err := NewAuthoritative(parent, other)
+	handler, err := NewZoneHandler(parent, other)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,19 +217,19 @@ func TestAuthoritativeCrossZoneCNAME(t *testing.T) {
 	}
 
 	mail := newTestZone(t, "mail.arpa.", record("mail.arpa.", dnsmessage.TypeMX, &dnsmessage.MXResource{MX: dnsmessage.MustNewName("alias.home.arpa.")}))
-	if _, err := NewAuthoritative(mail, parent); err == nil {
+	if _, err := NewZoneHandler(mail, parent); err == nil {
 		t.Fatal("accepted cross-zone MX alias")
 	}
 }
 
-func TestAuthoritativeNegativeTTL(t *testing.T) {
+func TestZoneHandlerNegativeTTL(t *testing.T) {
 	records := baseRecords("home.arpa.")
 	records[0].Header.TTL = 30 // Lower than SOA.MinTTL (60).
 	zone, err := NewZone("home.arpa.", records)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewAuthoritative(zone)
+	handler, err := NewZoneHandler(zone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestAuthoritativeNegativeTTL(t *testing.T) {
 	}
 }
 
-func TestAuthoritativeRootZone(t *testing.T) {
+func TestZoneHandlerRootZone(t *testing.T) {
 	zone, err := NewZone(".", []dnsmessage.Resource{
 		record(".", dnsmessage.TypeSOA, &dnsmessage.SOAResource{NS: dnsmessage.MustNewName("ns."), MBox: dnsmessage.MustNewName("hostmaster."), MinTTL: 60}),
 		record(".", dnsmessage.TypeNS, &dnsmessage.NSResource{NS: dnsmessage.MustNewName("ns.")}),
@@ -248,7 +248,7 @@ func TestAuthoritativeRootZone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewAuthoritative(zone)
+	handler, err := NewZoneHandler(zone)
 	if err != nil {
 		t.Fatal(err)
 	}

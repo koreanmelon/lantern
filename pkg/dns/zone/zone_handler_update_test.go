@@ -1,6 +1,7 @@
-package dns
+package zone
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -11,15 +12,15 @@ import (
 func TestReplaceZones(t *testing.T) {
 	old := newTestZone(t, "home.arpa.", record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}))
 	next := newTestZone(t, "home.arpa.", record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 2}}))
-	var authority Authoritative
+	var authority ZoneHandler
 	if got := ask(t, &authority, "app.home.arpa.", dnsmessage.TypeA); got.RCode != dnsmessage.RCodeRefused {
 		t.Fatal("zero value should refuse queries")
 	}
 	if err := authority.ReplaceZones(old); err != nil {
 		t.Fatal(err)
 	}
-	// A previously loaded snapshot remains usable after publication of a new one.
-	pinned := authority.snapshot.Load()
+	// Returned records remain independent of later updates.
+	previous := ask(t, &authority, "app.home.arpa.", dnsmessage.TypeA)
 	input := []*Zone{next}
 	if err := authority.ReplaceZones(input...); err != nil {
 		t.Fatal(err)
@@ -29,12 +30,8 @@ func TestReplaceZones(t *testing.T) {
 	if got.Answers[0].Body.(*dnsmessage.AResource).A[3] != 2 {
 		t.Fatal("replacement not visible")
 	}
-	previous, err := pinned.lookup(t.Context(), "app.home.arpa.", dnsmessage.TypeA)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if previous.Answers[0].Body.(*dnsmessage.AResource).A[3] != 1 {
-		t.Fatal("publication mutated an in-flight snapshot")
+		t.Fatal("replacement mutated a previously returned answer")
 	}
 
 	for _, tc := range []struct {
@@ -72,7 +69,7 @@ func TestReplaceZones(t *testing.T) {
 
 func TestReplaceZonesRejectsInvalidCrossZoneTargets(t *testing.T) {
 	mail := newTestZone(t, "mail.arpa.", record("mail.arpa.", dnsmessage.TypeMX, &dnsmessage.MXResource{MX: dnsmessage.MustNewName("alias.home.arpa.")}))
-	authority, err := NewAuthoritative(mail)
+	authority, err := NewZoneHandler(mail)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +78,7 @@ func TestReplaceZonesRejectsInvalidCrossZoneTargets(t *testing.T) {
 		t.Fatal("accepted cross-zone alias target")
 	}
 	if got := ask(t, authority, "alias.home.arpa.", dnsmessage.TypeA); got.RCode != dnsmessage.RCodeRefused {
-		t.Fatal("invalid snapshot was published")
+		t.Fatal("invalid zone set was installed")
 	}
 	if got := ask(t, authority, "mail.arpa.", dnsmessage.TypeMX); len(got.Answers) != 1 {
 		t.Fatal("invalid replacement removed existing records")
@@ -97,7 +94,7 @@ func TestConcurrentZoneReplacement(t *testing.T) {
 			newTestZone(t, "back.arpa.", record(target, dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, byte(i + 1)}})),
 		}
 	}
-	authority, err := NewAuthoritative(versions[0]...)
+	authority, err := NewZoneHandler(versions[0]...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,13 +122,13 @@ func TestConcurrentZoneReplacement(t *testing.T) {
 					return
 				}
 				if got.RCode != dnsmessage.RCodeSuccess || len(got.Answers) != 2 || !got.Authoritative {
-					t.Errorf("mixed or incomplete snapshot: %s", got.GoString())
+					t.Errorf("mixed or incomplete zone set: %s", got.GoString())
 					return
 				}
 				alias := got.Answers[0].Body.(*dnsmessage.CNAMEResource)
 				address := got.Answers[1].Body.(*dnsmessage.AResource)
 				if alias.CNAME.String() != fmt.Sprintf("v%d.back.arpa.", address.A[3]) {
-					t.Error("CNAME and address came from different snapshots")
+					t.Error("CNAME and address came from different zone sets")
 					return
 				}
 			}
@@ -139,4 +136,43 @@ func TestConcurrentZoneReplacement(t *testing.T) {
 	}
 	close(start)
 	workers.Wait()
+}
+
+func TestZoneHandlerReleasesReadLock(t *testing.T) {
+	handler, err := NewZoneHandler(newTestZone(t, "home.arpa.",
+		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{}),
+		record("loop.home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("loop.home.arpa.")}),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		queryName string
+		cancel    bool
+	}{
+		{"answer", "app.home.arpa.", false},
+		{"negative answer", "missing.home.arpa.", false},
+		{"outside zone", "example.com.", false},
+		{"CNAME loop", "loop.home.arpa.", false},
+		{"invalid question", "", false},
+		{"canceled", "app.home.arpa.", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.cancel {
+				cancel()
+			}
+			var query dnsmessage.Message
+			if tc.queryName != "" {
+				query.Questions = []dnsmessage.Question{{Name: dnsmessage.MustNewName(tc.queryName), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}}
+			}
+			_, _ = handler.Handle(ctx, query)
+			if !handler.mu.TryLock() {
+				t.Fatal("Handle left the read lock held")
+			}
+			handler.mu.Unlock()
+		})
+	}
 }

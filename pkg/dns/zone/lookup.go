@@ -1,4 +1,4 @@
-package dns
+package zone
 
 import (
 	"context"
@@ -8,16 +8,10 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-// zoneSnapshot is an immutable, validated zone collection. A query retains one
-// collection even if the authoritative handler publishes a replacement.
-type zoneSnapshot struct {
-	zones []*Zone
-}
-
-func newZoneSnapshot(zones []*Zone) (*zoneSnapshot, error) {
-	snapshot := &zoneSnapshot{zones: append([]*Zone(nil), zones...)}
+func prepareZones(zones []*Zone) ([]*Zone, error) {
+	zones = append([]*Zone(nil), zones...)
 	seen := make(map[string]bool)
-	for _, zone := range snapshot.zones {
+	for _, zone := range zones {
 		if zone == nil || zone.origin == "" {
 			return nil, fmt.Errorf("uninitialized zone")
 		}
@@ -26,25 +20,22 @@ func newZoneSnapshot(zones []*Zone) (*zoneSnapshot, error) {
 		}
 		seen[zone.origin] = true
 	}
-	sort.Slice(snapshot.zones, func(i, j int) bool {
-		return len(snapshot.zones[i].origin) > len(snapshot.zones[j].origin)
+	sort.Slice(zones, func(i, j int) bool {
+		return len(zones[i].origin) > len(zones[j].origin)
 	})
-	for _, zone := range snapshot.zones {
+	for _, zone := range zones {
 		if err := zone.validateTargets(func(name string) bool {
-			targetZone := snapshot.zoneFor(name)
+			targetZone := zoneFor(zones, name)
 			return targetZone != nil && len(targetZone.records[name][dnsmessage.TypeCNAME]) != 0
 		}); err != nil {
 			return nil, err
 		}
 	}
-	return snapshot, nil
+	return zones, nil
 }
 
-func (s *zoneSnapshot) zoneFor(name string) *Zone {
-	if s == nil {
-		return nil
-	}
-	for _, zone := range s.zones {
+func zoneFor(zones []*Zone, name string) *Zone {
+	for _, zone := range zones {
 		if withinZone(name, zone.origin) {
 			return zone
 		}
@@ -52,8 +43,8 @@ func (s *zoneSnapshot) zoneFor(name string) *Zone {
 	return nil
 }
 
-func (s *zoneSnapshot) lookup(ctx context.Context, name string, typ dnsmessage.Type) (dnsmessage.Message, error) {
-	if s.zoneFor(name) == nil {
+func lookup(ctx context.Context, zones []*Zone, name string, typ dnsmessage.Type) (dnsmessage.Message, error) {
+	if zoneFor(zones, name) == nil {
 		return dnsmessage.Message{Header: dnsmessage.Header{RCode: dnsmessage.RCodeRefused}}, nil
 	}
 	response := dnsmessage.Message{Header: dnsmessage.Header{Authoritative: true}}
@@ -62,7 +53,7 @@ func (s *zoneSnapshot) lookup(ctx context.Context, name string, typ dnsmessage.T
 		if err := ctx.Err(); err != nil {
 			return dnsmessage.Message{}, err
 		}
-		zone := s.zoneFor(name)
+		zone := zoneFor(zones, name)
 		if zone == nil {
 			// The alias leaves our authority. Its target is not resolved here.
 			return response, nil

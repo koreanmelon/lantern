@@ -5,7 +5,7 @@ package integration
 import (
 	"testing"
 
-	"github.com/koreanmelon/lantern/pkg/dns"
+	"github.com/koreanmelon/lantern/pkg/dns/zone"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -18,7 +18,7 @@ func record(name string, typ dnsmessage.Type, body dnsmessage.ResourceBody) dnsm
 	}
 }
 
-func newTestZone(t *testing.T, origin string, extra ...dnsmessage.Resource) *dns.Zone {
+func newTestZone(t *testing.T, origin string, extra ...dnsmessage.Resource) *zone.Zone {
 	t.Helper()
 	records := []dnsmessage.Resource{
 		record(origin, dnsmessage.TypeSOA, &dnsmessage.SOAResource{
@@ -27,11 +27,11 @@ func newTestZone(t *testing.T, origin string, extra ...dnsmessage.Resource) *dns
 		}),
 		record(origin, dnsmessage.TypeNS, &dnsmessage.NSResource{NS: dnsmessage.MustNewName("ns." + origin)}),
 	}
-	zone, err := dns.NewZone(origin, append(records, extra...))
+	z, err := zone.NewZone(origin, append(records, extra...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return zone
+	return z
 }
 
 func testQuery(t *testing.T) dnsmessage.Message {

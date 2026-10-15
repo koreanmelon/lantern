@@ -34,14 +34,14 @@ LAN address is explicit; do not expose the service to the public internet.
 ## Structure
 
 - `cmd/lantern`: process startup and shutdown; eventually wires DNS and DHCP.
-- `pkg/dns`: validated immutable zones and authoritative answers.
+- `pkg/dns/zone`: validated immutable zones, zone handler, and record lookup.
 - `pkg/dns/server`: UDP/TCP transport and request processing, using
   `dnsmessage.Message.Unpack` directly (package name `dnsserver`).
 - `tests/integration`: black-box socket tests, built with the `integration` tag.
 
 ## Zones
 
-`dns.NewZone(origin, records)` accepts absolute names (with a trailing dot) and
+`zone.NewZone(origin, records)` accepts absolute names (with a trailing dot) and
 IN-class `dnsmessage.Resource` values. Each zone requires exactly one apex SOA and
 at least one apex NS. Supported record types are A, AAAA, CNAME, NS, SOA, MX, TXT,
 SRV, and PTR. PTR records for reverse resolution belong in the appropriate
@@ -53,7 +53,7 @@ construction, and responses do not expose mutable storage. Queries match names
 case-insensitively, preserving the original question. Identical duplicate records
 should be avoided; they are not deduplicated automatically.
 
-`dns.NewAuthoritative(zones...)` returns an authoritative answerer. The most specific zone
+`zone.NewZoneHandler(zones...)` returns a handler for configured zones. The most specific zone
 wins when origins overlap. Intermediate names with descendants exist even if they
 have no records. Negative SOA TTLs use the lesser of the SOA TTL and its MinTTL.
 CNAME chains are followed within configured zones up to 16 links; loops or longer
@@ -69,29 +69,31 @@ advertises recursion as unavailable.
 Keep the authoritative handler installed and replace its data:
 
 ```go
-updated, err := dns.NewZone("home.arpa.", updatedRecords)
+updated, err := zone.NewZone("home.arpa.", updatedRecords)
 if err != nil {
     return err
 }
 return authority.ReplaceZones(updated) // Supply every zone to retain.
 ```
 
-`ReplaceZones` validates the entire replacement before publishing it atomically.
-Failures leave the previous data live. Each query uses one immutable snapshot,
-including all steps of a cross-zone CNAME chain; in-flight queries can finish on
-the old snapshot while new queries see the replacement. Calling it without zones
-removes all authority. No server restart or callback replacement is needed.
+`ReplaceZones` validates and copies the replacement zone slice before acquiring
+a write lock to install it. Failures leave the previous data live. Queries hold
+a read lock for their complete lookup and response copying, including all steps
+of a cross-zone CNAME chain, so they cannot mix old and new zone data. Updates
+wait for active readers, and pending writers can delay new queries. Calling it
+without zones removes all authority. No server restart or callback replacement
+is needed. Individual `Zone` values remain immutable.
 
-Concurrent replacements are safe, with the last publication winning. Applications
+Concurrent replacements are safe, with the last assignment winning. Applications
 composing edits must serialize them or implement revision checks to avoid lost
-updates. Do not copy an `Authoritative` after first use. There is no UI, file
+updates. Do not copy a `ZoneHandler` after first use. There is no UI, file
 watcher, or persistence layer yet. DNS caches can retain previous positive and
 negative answers until their TTLs expire.
 
 All server settings are in `dnsserver.Config`, including the handler function:
 
 ```go
-authority, err := dns.NewAuthoritative(zone)
+authority, err := zone.NewZoneHandler(configuredZone)
 if err != nil {
     return err
 }

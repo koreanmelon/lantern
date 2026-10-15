@@ -1,56 +1,59 @@
-package dns
+package zone
 
 import (
 	"context"
-	"sync/atomic"
+	"sync"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-// Authoritative answers only from its configured zones, without recursion or
+// ZoneHandler answers only from its configured zones, without recursion or
 // forwarding. It is safe for concurrent queries and zone replacement. Its zero
 // value refuses all queries. It must not be copied after first use.
-type Authoritative struct {
-	snapshot atomic.Pointer[zoneSnapshot]
+type ZoneHandler struct {
+	mu    sync.RWMutex
+	zones []*Zone
 }
 
-// NewAuthoritative validates and installs an initial set of immutable zones.
-func NewAuthoritative(zones ...*Zone) (*Authoritative, error) {
-	a := &Authoritative{}
-	if err := a.ReplaceZones(zones...); err != nil {
+// NewZoneHandler validates and installs an initial set of zones.
+func NewZoneHandler(zones ...*Zone) (*ZoneHandler, error) {
+	h := &ZoneHandler{}
+	if err := h.ReplaceZones(zones...); err != nil {
 		return nil, err
 	}
-	return a, nil
+	return h, nil
 }
 
 // ReplaceZones replaces the complete zone set, not just matching origins.
-// Validation failure leaves the current set untouched. Each query uses one
-// snapshot throughout its lookup, including cross-zone CNAME chains.
+// Validation failure leaves the current set untouched. Queries hold a read lock
+// throughout lookup and response copying, including cross-zone CNAME chains.
 // With no arguments it removes all zones. Concurrent replacements are safe;
-// the last publication wins. Callers composing edits must coordinate them.
-func (a *Authoritative) ReplaceZones(zones ...*Zone) error {
-	snapshot, err := newZoneSnapshot(zones)
+// the last assignment wins. Callers composing edits must coordinate them.
+func (h *ZoneHandler) ReplaceZones(zones ...*Zone) error {
+	replacement, err := prepareZones(zones)
 	if err != nil {
 		return err
 	}
-	a.snapshot.Store(snapshot)
+	h.mu.Lock()
+	h.zones = replacement
+	h.mu.Unlock()
 	return nil
 }
 
 // Handle answers a single IN-class question. ANY, transfers, and OPT questions
 // are refused. Responses do not share mutable record data with the zone store.
 // DNS outcomes such as NXDOMAIN are normal responses, not Go errors.
-func (a *Authoritative) Handle(ctx context.Context, query dnsmessage.Message) (dnsmessage.Message, error) {
+func (h *ZoneHandler) Handle(ctx context.Context, query dnsmessage.Message) (dnsmessage.Message, error) {
 	if err := ctx.Err(); err != nil {
 		return dnsmessage.Message{}, err
 	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	name, code := validateQuestion(query)
 	response := dnsmessage.Message{Header: dnsmessage.Header{RCode: code}}
 	if code == dnsmessage.RCodeSuccess {
-		// Load exactly once so an update cannot mix zones within a query.
-		snapshot := a.snapshot.Load()
 		var err error
-		response, err = snapshot.lookup(ctx, name, query.Questions[0].Type)
+		response, err = lookup(ctx, h.zones, name, query.Questions[0].Type)
 		if err != nil {
 			return dnsmessage.Message{}, err
 		}

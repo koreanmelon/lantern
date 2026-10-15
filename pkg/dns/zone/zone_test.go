@@ -1,4 +1,4 @@
-package dns
+package zone
 
 import (
 	"fmt"

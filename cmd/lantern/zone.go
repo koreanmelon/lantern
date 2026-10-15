@@ -1,16 +1,16 @@
 package main
 
 import (
-	"github.com/koreanmelon/lantern/pkg/dns"
+	"github.com/koreanmelon/lantern/pkg/dns/zone"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
 // exampleHandler keeps the initial zone explicit in Go until configuration
 // loading is added. The address is the intended Pi LAN address, not discovery.
-func exampleHandler() (*dns.Authoritative, error) {
+func exampleHandler() (*zone.ZoneHandler, error) {
 	apex := dnsmessage.MustNewName("home.arpa.")
 	server := dnsmessage.MustNewName("lantern.home.arpa.")
-	zone, err := dns.NewZone("home.arpa.", []dnsmessage.Resource{
+	z, err := zone.NewZone("home.arpa.", []dnsmessage.Resource{
 		{
 			Header: dnsmessage.ResourceHeader{Name: apex, Type: dnsmessage.TypeSOA, Class: dnsmessage.ClassINET, TTL: 300},
 			Body: &dnsmessage.SOAResource{
@@ -34,5 +34,5 @@ func exampleHandler() (*dns.Authoritative, error) {
 	if err != nil {
 		return nil, err
 	}
-	return dns.NewAuthoritative(zone)
+	return zone.NewZoneHandler(z)
 }

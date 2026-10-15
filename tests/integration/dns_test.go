@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/koreanmelon/lantern/pkg/dns"
 	dnsserver "github.com/koreanmelon/lantern/pkg/dns/server"
+	"github.com/koreanmelon/lantern/pkg/dns/zone"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -268,8 +268,8 @@ func TestServerStaysBusyUntilHandlersStop(t *testing.T) {
 	}
 }
 
-func TestAuthoritativeTransports(t *testing.T) {
-	handler, err := dns.NewAuthoritative(newTestZone(t, "home.arpa.",
+func TestZoneHandlerTransports(t *testing.T) {
+	handler, err := zone.NewZoneHandler(newTestZone(t, "home.arpa.",
 		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}),
 		record("large.home.arpa.", dnsmessage.TypeTXT, &dnsmessage.TXTResource{TXT: []string{
 			strings.Repeat("a", 250), strings.Repeat("b", 250), strings.Repeat("c", 250),
