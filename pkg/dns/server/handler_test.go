@@ -3,6 +3,7 @@ package dnsserver
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"reflect"
 	"testing"
 	"time"
@@ -40,8 +41,13 @@ func TestHandlerResponseContract(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			called := false
-			s := Server{Config: Config{Timeout: time.Second, Handler: func(ctx context.Context, got dnsmessage.Message) (dnsmessage.Message, error) {
+			ip := netip.MustParseAddr("192.0.2.1")
+			s := Server{Config: Config{HandlerTimeout: time.Second, Handler: func(ctx context.Context, request Request) (dnsmessage.Message, error) {
 				called = true
+				got := request.Message
+				if request.ClientIP != ip {
+					t.Fatal("handler received wrong client IP")
+				}
 				if got.ID != query.ID || !reflect.DeepEqual(got.Questions, query.Questions) {
 					t.Fatal("handler received the wrong query")
 				}
@@ -51,7 +57,7 @@ func TestHandlerResponseContract(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			packet, err = s.response(t.Context(), packet, false)
+			packet, err = s.response(t.Context(), packet, ip, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -82,7 +88,7 @@ func TestHandlerContext(t *testing.T) {
 	type contextKey struct{}
 	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), contextKey{}, "request value"))
 	defer cancel()
-	s := Server{Config: Config{Timeout: time.Second, Handler: func(handlerCtx context.Context, _ dnsmessage.Message) (dnsmessage.Message, error) {
+	s := Server{Config: Config{HandlerTimeout: time.Second, Handler: func(handlerCtx context.Context, _ Request) (dnsmessage.Message, error) {
 		if handlerCtx.Value(contextKey{}) != "request value" {
 			t.Fatal("request context was not propagated")
 		}
@@ -101,7 +107,7 @@ func TestHandlerContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.response(ctx, packet, true); err != nil {
+	if _, err := s.response(ctx, packet, netip.Addr{}, true); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -65,7 +65,7 @@ func startTestServer(t *testing.T, s *dnsserver.Server) (string, context.CancelF
 
 func TestServerRejectsOverlappingServe(t *testing.T) {
 	started := make(chan struct{}, 1)
-	s := &dnsserver.Server{Config: dnsserver.Config{Handler: func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
+	s := &dnsserver.Server{Config: dnsserver.Config{Handler: func(context.Context, dnsserver.Request) (dnsmessage.Message, error) {
 		select {
 		case started <- struct{}{}:
 		default:
@@ -191,29 +191,48 @@ func TestServerCanServeAfterStartupFailure(t *testing.T) {
 
 func TestListenAndServeUsesConfiguredAddress(t *testing.T) {
 	// An occupied address makes this deterministic without picking a fixed port.
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	s := &dnsserver.Server{Config: dnsserver.Config{Address: listener.Addr().String()}}
+	udp, tcp := listenTestPair(t)
+	defer udp.Close()
+	defer tcp.Close()
+	s := &dnsserver.Server{Config: dnsserver.Config{Address: tcp.Addr().String()}}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	for range 2 {
 		err := s.ListenAndServe(ctx)
-		if err == nil || !strings.Contains(err.Error(), "listen DNS TCP") {
+		var opErr *net.OpError
+		if !errors.As(err, &opErr) || opErr.Op != "listen" || opErr.Addr == nil || opErr.Addr.String() != tcp.Addr().String() {
 			t.Fatalf("did not attempt to bind configured address: %v", err)
 		}
 	}
-	if s.Config.Timeout != dnsserver.DefaultTimeout || s.Config.Concurrency != dnsserver.DefaultConcurrency {
+	if s.Config.ReadTimeout != dnsserver.DefaultReadTimeout || s.Config.WriteTimeout != dnsserver.DefaultWriteTimeout || s.Config.HandlerTimeout != dnsserver.DefaultHandlerTimeout || s.Config.Concurrency != dnsserver.DefaultConcurrency {
 		t.Fatal("startup did not populate configuration defaults")
 	}
+}
+
+func TestTCPBindFailureReleasesUDP(t *testing.T) {
+	udp, tcp := listenTestPair(t)
+	address := tcp.Addr().String()
+	udp.Close() // Leave only TCP occupied, so startup can bind UDP first.
+	defer tcp.Close()
+	s := &dnsserver.Server{Config: dnsserver.Config{Address: address}}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	err := s.ListenAndServe(ctx)
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) || opErr.Op != "listen" || !strings.HasPrefix(opErr.Net, "tcp") {
+		t.Fatalf("expected TCP bind failure: %v", err)
+	}
+	probe, err := net.ListenPacket("udp4", address)
+	if err != nil {
+		t.Fatalf("startup failure leaked UDP listener: %v", err)
+	}
+	probe.Close()
 }
 
 func TestServerStaysBusyUntilHandlersStop(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	s := &dnsserver.Server{Config: dnsserver.Config{Handler: func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
+	s := &dnsserver.Server{Config: dnsserver.Config{Handler: func(context.Context, dnsserver.Request) (dnsmessage.Message, error) {
 		close(started)
 		<-release
 		return dnsmessage.Message{}, nil
@@ -259,7 +278,9 @@ func TestAuthoritativeTransports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	address, _ := startTestServer(t, &dnsserver.Server{Config: dnsserver.Config{Handler: handler.Handle}})
+	address, _ := startTestServer(t, &dnsserver.Server{Config: dnsserver.Config{Handler: func(ctx context.Context, request dnsserver.Request) (dnsmessage.Message, error) {
+		return handler.Handle(ctx, request.Message)
+	}}})
 	for _, network := range []string{"udp", "tcp"} {
 		for _, tc := range []struct {
 			name    string
@@ -403,7 +424,7 @@ func TestServerTransports(t *testing.T) {
 }
 
 func TestServerShutdownClosesIdleTCP(t *testing.T) {
-	address, cancel := startTestServer(t, &dnsserver.Server{Config: dnsserver.Config{Timeout: time.Minute}})
+	address, cancel := startTestServer(t, &dnsserver.Server{Config: dnsserver.Config{ReadTimeout: time.Minute}})
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		t.Fatal(err)
@@ -426,7 +447,7 @@ func TestServerShutdownClosesIdleTCP(t *testing.T) {
 func TestServerCancelsActiveHandler(t *testing.T) {
 	started := make(chan struct{})
 	finished := make(chan struct{})
-	s := &dnsserver.Server{Config: dnsserver.Config{Handler: func(ctx context.Context, query dnsmessage.Message) (dnsmessage.Message, error) {
+	s := &dnsserver.Server{Config: dnsserver.Config{Handler: func(ctx context.Context, request dnsserver.Request) (dnsmessage.Message, error) {
 		close(started)
 		<-ctx.Done()
 		close(finished)

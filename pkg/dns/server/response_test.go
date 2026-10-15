@@ -3,6 +3,7 @@ package dnsserver
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -25,13 +26,13 @@ func TestResponseCodes(t *testing.T) {
 		name       string
 		opcode     dnsmessage.OpCode
 		noQuestion bool
-		handler    func(context.Context, dnsmessage.Message) (dnsmessage.Message, error)
+		handler    func(context.Context, Request) (dnsmessage.Message, error)
 		code       dnsmessage.RCode
 	}{
 		{name: "default refused", code: dnsmessage.RCodeRefused},
 		{name: "unsupported opcode", opcode: 2, code: dnsmessage.RCodeNotImplemented},
 		{name: "missing question", noQuestion: true, code: dnsmessage.RCodeFormatError},
-		{name: "handler error", handler: func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
+		{name: "handler error", handler: func(context.Context, Request) (dnsmessage.Message, error) {
 			return dnsmessage.Message{}, errors.New("failed")
 		}, code: dnsmessage.RCodeServerFailure},
 	} {
@@ -45,8 +46,8 @@ func TestResponseCodes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r := Server{Config: Config{Handler: tc.handler, Timeout: time.Second}}
-			encoded, err := r.response(t.Context(), packet, true)
+			r := Server{Config: Config{Handler: tc.handler, HandlerTimeout: time.Second}}
+			encoded, err := r.response(t.Context(), packet, netip.Addr{}, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,7 +69,7 @@ func TestResponseTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := Server{Config: Config{Timeout: time.Second, Handler: func(context.Context, dnsmessage.Message) (dnsmessage.Message, error) {
+	r := Server{Config: Config{HandlerTimeout: time.Second, Handler: func(context.Context, Request) (dnsmessage.Message, error) {
 		var response dnsmessage.Message
 		for range 100 {
 			response.Answers = append(response.Answers, dnsmessage.Resource{
@@ -80,7 +81,7 @@ func TestResponseTruncation(t *testing.T) {
 	},
 	}}
 	for _, udp := range []bool{true, false} {
-		encoded, err := r.response(t.Context(), packet, udp)
+		encoded, err := r.response(t.Context(), packet, netip.Addr{}, udp)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -99,7 +100,7 @@ func TestResponseTruncation(t *testing.T) {
 }
 
 func TestResponseRejectsInvalidInput(t *testing.T) {
-	r := Server{Config: Config{Timeout: time.Second}}
+	r := Server{Config: Config{HandlerTimeout: time.Second}}
 	for _, tc := range []struct {
 		name   string
 		packet []byte
@@ -110,7 +111,7 @@ func TestResponseRejectsInvalidInput(t *testing.T) {
 		{"pointer loop", []byte{0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xc0, 0x0c, 0, 1, 0, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := r.response(t.Context(), tc.packet, true); err == nil {
+			if _, err := r.response(t.Context(), tc.packet, netip.Addr{}, true); err == nil {
 				t.Fatal("accepted malformed packet")
 			}
 		})
@@ -121,7 +122,7 @@ func TestResponseRejectsInvalidInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.response(t.Context(), packet, true); err == nil {
+	if _, err := r.response(t.Context(), packet, netip.Addr{}, true); err == nil {
 		t.Fatal("answered a response packet")
 	}
 }
@@ -139,8 +140,8 @@ func FuzzResponse(f *testing.F) {
 	}
 	f.Add(packet)
 	f.Fuzz(func(t *testing.T, packet []byte) {
-		s := Server{Config: Config{Timeout: time.Second}}
-		response, err := s.response(t.Context(), packet, true)
+		s := Server{Config: Config{HandlerTimeout: time.Second}}
+		response, err := s.response(t.Context(), packet, netip.Addr{}, true)
 		if err != nil {
 			return
 		}

@@ -36,8 +36,9 @@ func (s *Server) handleTCP(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
+	ip := clientIP(conn.RemoteAddr())
 	for ctx.Err() == nil {
-		if err := conn.SetReadDeadline(time.Now().Add(s.Config.Timeout)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(s.Config.ReadTimeout)); err != nil {
 			return
 		}
 		var prefix [2]byte
@@ -48,12 +49,12 @@ func (s *Server) handleTCP(ctx context.Context, conn net.Conn) {
 		if _, err := io.ReadFull(conn, packet); err != nil {
 			return
 		}
-		response, err := s.response(ctx, packet, false)
+		response, err := s.response(ctx, packet, ip, false)
 		if err != nil || len(response) > 65535 {
 			return
 		}
 		binary.BigEndian.PutUint16(prefix[:], uint16(len(response)))
-		if err := conn.SetWriteDeadline(time.Now().Add(s.Config.Timeout)); err != nil {
+		if err := conn.SetWriteDeadline(time.Now().Add(s.Config.WriteTimeout)); err != nil {
 			return
 		}
 		// io.Copy handles partial writes; send prefix and message as one frame.

@@ -3,11 +3,12 @@ package dnsserver
 import (
 	"context"
 	"errors"
+	"net/netip"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-func (s *Server) response(ctx context.Context, packet []byte, udp bool) ([]byte, error) {
+func (s *Server) response(ctx context.Context, packet []byte, ip netip.Addr, udp bool) ([]byte, error) {
 	var query dnsmessage.Message
 	if err := query.Unpack(packet); err != nil {
 		return nil, err
@@ -26,11 +27,11 @@ func (s *Server) response(ctx context.Context, packet []byte, udp bool) ([]byte,
 	case s.Config.Handler == nil:
 		response.RCode = dnsmessage.RCodeRefused
 	default:
-		handlerCtx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
+		handlerCtx, cancel := context.WithTimeout(ctx, s.Config.HandlerTimeout)
 		defer cancel()
 
 		var err error
-		response, err = s.Config.Handler(handlerCtx, query)
+		response, err = s.Config.Handler(handlerCtx, Request{Message: query, ClientIP: ip})
 		if err != nil {
 			response = dnsmessage.Message{RCode: dnsmessage.RCodeServerFailure}
 		}

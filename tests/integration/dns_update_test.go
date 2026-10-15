@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 	"net"
@@ -23,7 +24,9 @@ func TestLiveZoneReplacement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			address, _ := startTestServer(t, &dnsserver.Server{Config: dnsserver.Config{Handler: authority.Handle}})
+			address, _ := startTestServer(t, &dnsserver.Server{Config: dnsserver.Config{Handler: func(ctx context.Context, request dnsserver.Request) (dnsmessage.Message, error) {
+				return authority.Handle(ctx, request.Message)
+			}}})
 			conn, err := net.Dial(network, address)
 			if err != nil {
 				t.Fatal(err)

@@ -97,10 +97,18 @@ if err != nil {
 }
 s := dnsserver.Server{Config: dnsserver.Config{
     Address: "127.0.0.1:1053",
-    Handler: authority.Handle,
+    Handler: func(ctx context.Context, request dnsserver.Request) (dnsmessage.Message, error) {
+        return authority.Handle(ctx, request.Message)
+    },
 }}
 return s.ListenAndServe(ctx)
 ```
+
+The callback receives `Request{Message, ClientIP}`. `ClientIP` is a `netip.Addr`
+for the immediate UDP/TCP peer, without its port, with IPv4-mapped IPv6 addresses
+unmapped. An invalid address means unavailable. It is not an authenticated
+identity. Behind a proxy it identifies the proxy; forwarded-header handling and
+DoH are not implemented. The authoritative lookup remains message-only.
 
 The function must be safe for concurrent calls and honor cancellation. A nil handler
 returns `REFUSED`. Handler errors become `SERVFAIL`. Malformed packets and packets
@@ -117,11 +125,22 @@ SERVFAIL instead.
 
 UDP responses are capped at 512 bytes, with oversized responses reduced to a
 truncated reply for TCP retry. TCP supports multiple sequential queries per
-connection, but not out-of-order pipelined processing. Defaults are a one-second
-I/O/handler timeout and a shared limit of 100 UDP requests/TCP connections.
+connection, but not out-of-order pipelined processing. The shared limit is 100
+UDP requests/TCP connections by default. Timeouts are independently configurable:
+
+- `ReadTimeout`: one complete TCP frame (prefix and payload), default one second.
+  It does not impose an idle timeout on UDP reception.
+- `WriteTimeout`: one TCP response write or UDP send, default one second. UDP
+  sends serialize deadline-setting and writing because the socket is shared;
+  time waiting for the send lock is not part of the write timeout.
+- `HandlerTimeout`: cooperative handler deadline, default one second. It does
+  not forcibly interrupt a handler or impose a total request-duration limit.
+
 The default address is `127.0.0.1:1053`. Startup populates zero-valued settings
-in `Config` from the package's default constants.
-The command currently overrides these defaults to 10 seconds and 10 respectively.
+in `Config` from the package's default constants via `Normalize`, which also
+rejects negative timeouts/concurrency. The command currently sets all three
+timeouts to 10 seconds and concurrency to 10. Both listeners bind to the same
+numeric port, including when `Address` specifies port zero.
 Handlers must honor cancellation; Go cannot forcibly terminate handler code.
 
 Each `Server` owns its concurrency limit and active workers. Only one `Serve`
@@ -139,7 +158,7 @@ go test -race -tags=integration ./tests/integration/...
 go vet ./...
 ```
 
-Integration tests are in the external `integration_test` package and use only
+Integration tests are in a separate package and use only
 public APIs. They bind ephemeral loopback ports; no external DNS is needed.
 Unit tests remain alongside the code they test. To run both suites together, use
 `go test -race -tags=integration ./...`.

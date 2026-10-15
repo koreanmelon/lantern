@@ -15,9 +15,10 @@ import (
 type Server struct {
 	Config Config
 
-	serving atomic.Bool
-	slots   chan struct{}
-	workers sync.WaitGroup
+	serving   atomic.Bool
+	slots     chan struct{}
+	workers   sync.WaitGroup
+	udpWrites sync.Mutex
 }
 
 // ListenAndServe binds both transports to Config.Address. Port zero selects the
@@ -28,7 +29,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	defer s.serving.Store(false)
 
-	if err := s.Config.SetDefaults(); err != nil {
+	if err := s.Config.Normalize(); err != nil {
 		return err
 	}
 
@@ -42,7 +43,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	defer udp.Close()
 
 	// TCP
-	tcp, err := lc.Listen(ctx, "tcp", s.Config.Address)
+	tcp, err := lc.Listen(ctx, "tcp", udp.LocalAddr().String())
 	if err != nil {
 		return fmt.Errorf("failed to listen on TCP socket: %w", err)
 	}
@@ -73,7 +74,7 @@ func (s *Server) Serve(ctx context.Context, udp net.PacketConn, tcp net.Listener
 		return errors.New("DNS requires both UDP and TCP listeners")
 	}
 
-	if err := s.Config.SetDefaults(); err != nil {
+	if err := s.Config.Normalize(); err != nil {
 		return err
 	}
 

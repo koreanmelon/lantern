@@ -7,6 +7,7 @@ import (
 
 	"github.com/koreanmelon/lantern/pkg/dns/server"
 	"github.com/spf13/cobra"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 func newRootCommand(serve func(context.Context, string) error) *cobra.Command {
@@ -33,10 +34,14 @@ func serveDNS(ctx context.Context, address string) error {
 	}
 	s := dnsserver.Server{
 		Config: dnsserver.Config{
-			Address:     address,
-			Handler:     handler.Handle,
-			Timeout:     10 * time.Second,
-			Concurrency: 10,
+			Address: address,
+			Handler: func(ctx context.Context, request dnsserver.Request) (dnsmessage.Message, error) {
+				return handler.Handle(ctx, request.Message)
+			},
+			ReadTimeout:    10 * time.Second,
+			WriteTimeout:   10 * time.Second,
+			HandlerTimeout: 10 * time.Second,
+			Concurrency:    10,
 		},
 	}
 	return s.ListenAndServe(ctx)
