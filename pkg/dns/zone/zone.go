@@ -4,14 +4,17 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-// Zone indexes DNS records. Record bodies are borrowed, not deep-copied.
-// Finish construction before installing a zone in a handler, then treat the
-// zone and all supplied record data as read-only.
+// Zone stores and answers queries for one DNS zone. Its methods are safe for
+// concurrent use. Record bodies and returned data are borrowed and must remain
+// read-only. A Zone must not be copied after first use. Construct it with NewZone;
+// its zero value refuses queries and cannot accept records.
 type Zone struct {
+	mu      sync.RWMutex
 	origin  string
 	soa     dnsmessage.Resource
 	records map[RecordKey][]dnsmessage.Resource
@@ -33,12 +36,12 @@ func NewZone(origin string, records []dnsmessage.Resource) (*Zone, error) {
 		names:   make(map[string]bool),
 	}
 	for i, record := range records {
-		if err := z.Add(record); err != nil {
+		if err := z.add(record); err != nil {
 			return nil, fmt.Errorf("zone %s record %d: %w", name, i, err)
 		}
 	}
 
-	if err := z.Validate(); err != nil {
+	if err := z.validate(); err != nil {
 		return nil, err
 	}
 
@@ -47,9 +50,47 @@ func NewZone(origin string, records []dnsmessage.Resource) (*Zone, error) {
 	return z, nil
 }
 
-// Add validates and indexes a record without cloning its body. It is not safe
-// for concurrent use and must not be called after installing the zone in a handler.
+// Add atomically adds a record after validating the complete resulting zone.
+// Failure leaves the zone unchanged. The record body is borrowed, not cloned.
 func (z *Zone) Add(record dnsmessage.Resource) error {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	if z.origin == "" {
+		return fmt.Errorf("uninitialized zone")
+	}
+	var records []dnsmessage.Resource
+	for _, set := range z.records {
+		records = append(records, set...)
+	}
+	records = append(records, record)
+	replacement, err := NewZone(z.origin, records)
+	if err != nil {
+		return err
+	}
+	z.records, z.names, z.soa = replacement.records, replacement.names, replacement.soa
+	return nil
+}
+
+// ReplaceRecords atomically replaces all records while keeping the origin fixed.
+// The replacement must contain a valid SOA and NS set. Validation happens before
+// the write lock; failure leaves the zone unchanged. Concurrent replacements are
+// safe, with the last assignment winning. Supplied record bodies remain borrowed.
+func (z *Zone) ReplaceRecords(records []dnsmessage.Resource) error {
+	if z.origin == "" {
+		return fmt.Errorf("uninitialized zone")
+	}
+	replacement, err := NewZone(z.origin, records)
+	if err != nil {
+		return err
+	}
+	z.mu.Lock()
+	z.records, z.names, z.soa = replacement.records, replacement.names, replacement.soa
+	z.mu.Unlock()
+	return nil
+}
+
+// add is used only during private construction, before the zone is published.
+func (z *Zone) add(record dnsmessage.Resource) error {
 	owner, err := FQDN(record.Header.Name.String())
 	if err != nil {
 		return err
@@ -152,6 +193,12 @@ func (z *Zone) Add(record dnsmessage.Resource) error {
 }
 
 func (z *Zone) Validate() error {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+	return z.validate()
+}
+
+func (z *Zone) validate() error {
 	soa := z.records[RecordKey{name: z.origin, typ: dnsmessage.TypeSOA}]
 	ns := z.records[RecordKey{name: z.origin, typ: dnsmessage.TypeNS}]
 	if len(soa) != 1 || len(ns) == 0 {
@@ -182,7 +229,7 @@ func (z *Zone) Validate() error {
 }
 
 func (z *Zone) Has(name string) bool {
-	return z.origin == "." || name == z.origin || strings.HasSuffix(name, "."+z.origin)
+	return z.origin != "" && (z.origin == "." || name == z.origin || strings.HasSuffix(name, "."+z.origin))
 }
 
 // Origin returns the zone's canonical absolute origin.
@@ -199,11 +246,14 @@ func (z *Zone) Lookup(name string, typ dnsmessage.Type) ([]dnsmessage.Resource, 
 	if err != nil {
 		return nil, false
 	}
-
+	z.mu.RLock()
+	defer z.mu.RUnlock()
 	return z.records[RecordKey{name, typ}], z.names[name]
 }
 
 // SOA returns the zone's SOA record. Its body is borrowed and must not be mutated.
 func (z *Zone) SOA() dnsmessage.Resource {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
 	return z.soa
 }

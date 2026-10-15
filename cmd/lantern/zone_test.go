@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/koreanmelon/lantern/pkg/dns/server"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -26,7 +27,7 @@ func TestExampleZone(t *testing.T) {
 				Header:    dnsmessage.Header{ID: 123, RecursionDesired: true},
 				Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(tc.name), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
 			}
-			response, err := handler.Handle(t.Context(), query)
+			response, err := handler.Handle(t.Context(), dnsserver.Request{Message: query})
 			if err != nil {
 				t.Fatal(err)
 			}

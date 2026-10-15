@@ -34,8 +34,7 @@ LAN address is explicit; do not expose the service to the public internet.
 ## Structure
 
 - `cmd/lantern`: process startup and shutdown; eventually wires DNS and DHCP.
-- `pkg/dns/zone`: validated read-only zone data and single-zone record access.
-- `pkg/dns/hosted`: zone selection, query handling, CNAME traversal, and DNS answers.
+- `pkg/dns/zone`: synchronized single-zone record storage, validation, and query handling.
 - `pkg/dns/server`: UDP/TCP transport and request processing, using
   `dnsmessage.Message.Unpack` directly (package name `dnsserver`).
 - `tests/integration`: black-box socket tests, built with the `integration` tag.
@@ -53,17 +52,18 @@ CNAME exclusivity, and NS/MX/SRV targets that alias another name in the same zon
 Relationships between different zones are not validated. Record bodies and their
 nested slices are not deep-copied at construction or when answering queries.
 Callers must treat supplied record data and returned records as read-only.
-Do not call `Zone.Add` after installing the zone in a handler; its mutex protects
-zone replacement and lookups, not mutations through external references. Build a
-replacement zone instead. Wire-format validation is retained during construction.
+Use `Zone.Add` or `Zone.ReplaceRecords` for changes; these methods synchronize and
+validate updates. The mutex cannot protect mutations through external record-body
+references. Wire-format validation is retained during construction and updates.
 Queries match names case-insensitively, preserving the original question.
 Identical duplicate records should be avoided; they are not deduplicated automatically.
 
-`hosted.NewZoneHandler(zones...)` returns a handler for configured zones. The most specific zone
-wins when origins overlap. Intermediate names with descendants exist even if they
-have no records. Negative SOA TTLs use the lesser of the SOA TTL and its MinTTL.
-CNAME chains are followed within configured zones up to 16 links; loops or longer
-chains receive `SERVFAIL`. External CNAME targets are returned without resolution.
+`Zone.Handle` directly matches the server callback. Each zone answers only for its
+fixed origin; outside names receive `REFUSED`. Intermediate names with descendants
+exist even if they have no records. Negative SOA TTLs use the lesser of the SOA TTL
+and its MinTTL. CNAME chains are followed within this zone up to 16 links; loops
+or longer chains receive `SERVFAIL`. Targets outside the zone are returned
+without resolution. There is no multi-zone router or cross-zone traversal.
 
 ANY, zone transfers, and non-IN questions are refused. Wildcards, delegation,
 DNSSEC, dynamic updates, EDNS negotiation, and hot reload are unsupported. Unknown
@@ -72,42 +72,39 @@ advertises recursion as unavailable.
 
 ### Updating zones while serving
 
-Keep the authoritative handler installed and replace its data:
+Keep the zone's handler installed and replace its records:
 
 ```go
-updated, err := zone.NewZone("home.arpa.", updatedRecords)
-if err != nil {
-    return err
-}
-return authority.ReplaceZones(updated) // Supply every zone to retain.
+return z.ReplaceRecords(updatedRecords) // Include the zone's SOA and NS records.
 ```
 
-`ReplaceZones` validates and copies the replacement zone slice before acquiring
-a write lock to install it. Failures leave the previous data live. Queries hold
-a read lock for their complete lookup, including all steps
-of a cross-zone CNAME chain, so they cannot mix old and new zone data. Updates
-wait for active readers, and pending writers can delay new queries. Calling it
-without zones removes all authority. No server restart or callback replacement
-is needed. Installed zones and their borrowed record data must remain read-only.
+`ReplaceRecords` builds and validates replacement indexes before acquiring a write
+lock to install them. The origin stays fixed, and invalid replacements leave the
+previous records intact. Queries hold a read lock throughout lookup and CNAME
+traversal. `Add` holds the write lock while rebuilding and validating the resulting
+zone, so concurrent additions do not lose records and failed additions leave no
+partial changes. This favors straightforward validation over optimized updates.
+Updates wait for active readers, and pending writers can delay new queries.
+No server restart or callback replacement is needed. To remove ordinary records,
+replace them with a smaller set that still contains the required SOA and NS.
 
 Concurrent replacements are safe, with the last assignment winning. Applications
 composing edits must serialize them or implement revision checks to avoid lost
-updates. Do not copy a `ZoneHandler` after first use. There is no UI, file
+updates. Do not copy a `Zone` after first use. Its zero value refuses queries;
+use `NewZone` before adding or replacing records. There is no UI, file
 watcher, or persistence layer yet. DNS caches can retain previous positive and
 negative answers until their TTLs expire.
 
 All server settings are in `dnsserver.Config`, including the handler function:
 
 ```go
-authority, err := hosted.NewZoneHandler(configuredZone)
+z, err := zone.NewZone("home.arpa.", records)
 if err != nil {
     return err
 }
 s := dnsserver.Server{Config: dnsserver.Config{
     Address: "127.0.0.1:1053",
-    Handler: func(ctx context.Context, request dnsserver.Request) (dnsmessage.Message, error) {
-        return authority.Handle(ctx, request.Message)
-    },
+    Handler: z.Handle,
 }}
 return s.ListenAndServe(ctx)
 ```
@@ -116,7 +113,8 @@ The callback receives `Request{Message, ClientIP}`. `ClientIP` is a `netip.Addr`
 for the immediate UDP/TCP peer, without its port, with IPv4-mapped IPv6 addresses
 unmapped. An invalid address means unavailable. It is not an authenticated
 identity. Behind a proxy it identifies the proxy; forwarded-header handling and
-DoH are not implemented. The authoritative lookup remains message-only.
+DoH are not implemented. `Zone.Handle` accepts this request directly; currently
+its record lookup does not use the client IP.
 
 The function must be safe for concurrent calls and honor cancellation. A nil handler
 returns `REFUSED`. Handler errors become `SERVFAIL`. Malformed packets and packets

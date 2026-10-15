@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/koreanmelon/lantern/pkg/dns/hosted"
 	dnsserver "github.com/koreanmelon/lantern/pkg/dns/server"
 	"golang.org/x/net/dns/dnsmessage"
 )
@@ -268,19 +267,14 @@ func TestServerStaysBusyUntilHandlersStop(t *testing.T) {
 	}
 }
 
-func TestZoneHandlerTransports(t *testing.T) {
-	handler, err := hosted.NewZoneHandler(newTestZone(t, "home.arpa.",
+func TestZoneTransports(t *testing.T) {
+	z := newTestZone(t, "home.arpa.",
 		record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}),
 		record("large.home.arpa.", dnsmessage.TypeTXT, &dnsmessage.TXTResource{TXT: []string{
 			strings.Repeat("a", 250), strings.Repeat("b", 250), strings.Repeat("c", 250),
 		}}),
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-	address, _ := startTestServer(t, &dnsserver.Server{Config: dnsserver.Config{Handler: func(ctx context.Context, request dnsserver.Request) (dnsmessage.Message, error) {
-		return handler.Handle(ctx, request.Message)
-	}}})
+	)
+	address, _ := startTestServer(t, &dnsserver.Server{Config: dnsserver.Config{Handler: z.Handle}})
 	for _, network := range []string{"udp", "tcp"} {
 		for _, tc := range []struct {
 			name    string

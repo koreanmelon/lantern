@@ -3,30 +3,25 @@
 package integration
 
 import (
-	"context"
 	"encoding/binary"
 	"io"
 	"net"
 	"testing"
 	"time"
 
-	"github.com/koreanmelon/lantern/pkg/dns/hosted"
 	"github.com/koreanmelon/lantern/pkg/dns/server"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-func TestLiveZoneReplacement(t *testing.T) {
+func TestLiveRecordReplacement(t *testing.T) {
 	for _, network := range []string{"udp", "tcp"} {
 		t.Run(network, func(t *testing.T) {
 			old := newTestZone(t, "home.arpa.", record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}))
-			next := newTestZone(t, "home.arpa.", record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 2}}))
-			authority, err := hosted.NewZoneHandler(old)
-			if err != nil {
-				t.Fatal(err)
+			base := []dnsmessage.Resource{
+				old.SOA(),
+				record("home.arpa.", dnsmessage.TypeNS, &dnsmessage.NSResource{NS: dnsmessage.MustNewName("ns.home.arpa.")}),
 			}
-			address, _ := startTestServer(t, &dnsserver.Server{Config: dnsserver.Config{Handler: func(ctx context.Context, request dnsserver.Request) (dnsmessage.Message, error) {
-				return authority.Handle(ctx, request.Message)
-			}}})
+			address, _ := startTestServer(t, &dnsserver.Server{Config: dnsserver.Config{Handler: old.Handle}})
 			conn, err := net.Dial(network, address)
 			if err != nil {
 				t.Fatal(err)
@@ -43,11 +38,11 @@ func TestLiveZoneReplacement(t *testing.T) {
 			// Keep both the server and client connection throughout the updates.
 			for _, version := range []byte{1, 2, 0} {
 				if version == 2 {
-					if err := authority.ReplaceZones(next); err != nil {
+					if err := old.ReplaceRecords(append(base, record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 2}}))); err != nil {
 						t.Fatal(err)
 					}
 				} else if version == 0 {
-					if err := authority.ReplaceZones(); err != nil {
+					if err := old.ReplaceRecords(base); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -81,8 +76,8 @@ func TestLiveZoneReplacement(t *testing.T) {
 					t.Fatal(err)
 				}
 				if version == 0 {
-					if response.RCode != dnsmessage.RCodeRefused || response.Authoritative || len(response.Answers) != 0 {
-						t.Fatal("removed zone is still served")
+					if response.RCode != dnsmessage.RCodeNameError || !response.Authoritative || len(response.Answers) != 0 || len(response.Authorities) != 1 {
+						t.Fatal("removed record did not receive an authoritative negative answer")
 					}
 					continue
 				}
