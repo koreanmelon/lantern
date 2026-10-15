@@ -12,9 +12,11 @@ func (s *Server) response(ctx context.Context, packet []byte, udp bool) ([]byte,
 	if err := query.Unpack(packet); err != nil {
 		return nil, err
 	}
+
 	if query.Response {
 		return nil, errors.New("received a DNS response, not a query")
 	}
+
 	var response dnsmessage.Message
 	switch {
 	case query.OpCode != 0:
@@ -26,21 +28,25 @@ func (s *Server) response(ctx context.Context, packet []byte, udp bool) ([]byte,
 	default:
 		handlerCtx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
 		defer cancel()
+
 		var err error
 		response, err = s.Config.Handler(handlerCtx, query)
 		if err != nil {
-			response = dnsmessage.Message{Header: dnsmessage.Header{RCode: dnsmessage.RCodeServerFailure}}
+			response = dnsmessage.Message{RCode: dnsmessage.RCodeServerFailure}
 		}
 	}
+
 	response.ID = query.ID
 	response.Response = true
 	response.OpCode = query.OpCode
 	response.RecursionDesired = query.RecursionDesired
 	response.Questions = query.Questions
+
 	encoded, err := response.Pack()
 	if err != nil {
 		return nil, err
 	}
+
 	// EDNS is not supported yet. Always respect the classic 512-byte UDP limit.
 	if udp && len(encoded) > 512 {
 		response.Truncated = true

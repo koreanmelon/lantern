@@ -16,14 +16,17 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) error {
 		if err != nil {
 			return fmt.Errorf("accept DNS TCP: %w", err)
 		}
+
 		select {
 		case s.slots <- struct{}{}:
 		default:
 			conn.Close()
 			continue
 		}
+
 		s.workers.Go(func() {
 			defer func() { <-s.slots }()
+
 			s.handleTCP(ctx, conn)
 		})
 	}
