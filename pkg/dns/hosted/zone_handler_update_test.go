@@ -1,4 +1,4 @@
-package zone
+package hosted
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/koreanmelon/lantern/pkg/dns/zone"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -21,7 +22,7 @@ func TestReplaceZones(t *testing.T) {
 	}
 	// Replacing a zone does not change previously returned read-only records.
 	previous := ask(t, &authority, "app.home.arpa.", dnsmessage.TypeA)
-	input := []*Zone{next}
+	input := []*zone.Zone{next}
 	if err := authority.ReplaceZones(input...); err != nil {
 		t.Fatal(err)
 	}
@@ -36,11 +37,11 @@ func TestReplaceZones(t *testing.T) {
 
 	for _, tc := range []struct {
 		name  string
-		zones []*Zone
+		zones []*zone.Zone
 	}{
-		{"nil zone", []*Zone{nil}},
-		{"uninitialized zone", []*Zone{{}}},
-		{"duplicate origins", []*Zone{next, next}},
+		{"nil zone", []*zone.Zone{nil}},
+		{"uninitialized zone", []*zone.Zone{{}}},
+		{"duplicate origins", []*zone.Zone{next, next}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := authority.ReplaceZones(tc.zones...); err == nil {
@@ -85,11 +86,37 @@ func TestReplaceZonesValidatesZonesIndependently(t *testing.T) {
 	}
 }
 
+func TestReplaceZonesRejectsInvalidZoneEdits(t *testing.T) {
+	current := newTestZone(t, "home.arpa.", record("app.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}}))
+	handler, err := NewZoneHandler(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := newTestZone(t, "new.arpa.")
+	for _, r := range []dnsmessage.Resource{
+		record("new.arpa.", dnsmessage.TypeMX, &dnsmessage.MXResource{MX: dnsmessage.MustNewName("alias.new.arpa.")}),
+		record("alias.new.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("mail.new.arpa.")}),
+	} {
+		if err := candidate.Add(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := handler.ReplaceZones(current, candidate); err == nil {
+		t.Fatal("installed a zone with an invalid local target")
+	}
+	if got := ask(t, handler, "app.home.arpa.", dnsmessage.TypeA); len(got.Answers) != 1 || got.Answers[0].Body.(*dnsmessage.AResource).A[3] != 1 {
+		t.Fatal("invalid replacement changed existing data")
+	}
+	if got := ask(t, handler, "new.arpa.", dnsmessage.TypeMX); got.RCode != dnsmessage.RCodeRefused {
+		t.Fatal("invalid replacement added the candidate zone")
+	}
+}
+
 func TestConcurrentZoneReplacement(t *testing.T) {
-	versions := make([][]*Zone, 2)
+	versions := make([][]*zone.Zone, 2)
 	for i := range versions {
 		target := fmt.Sprintf("v%d.back.arpa.", i+1)
-		versions[i] = []*Zone{
+		versions[i] = []*zone.Zone{
 			newTestZone(t, "front.arpa.", record("app.front.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName(target)})),
 			newTestZone(t, "back.arpa.", record(target, dnsmessage.TypeA, &dnsmessage.AResource{A: [4]byte{192, 0, 2, byte(i + 1)}})),
 		}

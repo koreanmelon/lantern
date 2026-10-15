@@ -1,10 +1,12 @@
-package zone
+package hosted
 
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 
+	"github.com/koreanmelon/lantern/pkg/dns/zone"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -171,7 +173,7 @@ func TestZoneHandlerMultipleZones(t *testing.T) {
 	if _, err := NewZoneHandler(nil); err == nil {
 		t.Fatal("accepted nil zone")
 	}
-	if _, err := NewZoneHandler(&Zone{}); err == nil {
+	if _, err := NewZoneHandler(&zone.Zone{}); err == nil {
 		t.Fatal("accepted uninitialized zone")
 	}
 }
@@ -214,11 +216,11 @@ func TestZoneHandlerCrossZoneCNAME(t *testing.T) {
 func TestZoneHandlerNegativeTTL(t *testing.T) {
 	records := baseRecords("home.arpa.")
 	records[0].Header.TTL = 30 // Lower than SOA.MinTTL (60).
-	zone, err := NewZone("home.arpa.", records)
+	z, err := zone.NewZone("home.arpa.", records)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewZoneHandler(zone)
+	handler, err := NewZoneHandler(z)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +231,7 @@ func TestZoneHandlerNegativeTTL(t *testing.T) {
 }
 
 func TestZoneHandlerRootZone(t *testing.T) {
-	zone, err := NewZone(".", []dnsmessage.Resource{
+	z, err := zone.NewZone(".", []dnsmessage.Resource{
 		record(".", dnsmessage.TypeSOA, &dnsmessage.SOAResource{NS: dnsmessage.MustNewName("ns."), MBox: dnsmessage.MustNewName("hostmaster."), MinTTL: 60}),
 		record(".", dnsmessage.TypeNS, &dnsmessage.NSResource{NS: dnsmessage.MustNewName("ns.")}),
 		record("app.example.", dnsmessage.TypeA, &dnsmessage.AResource{}),
@@ -237,7 +239,7 @@ func TestZoneHandlerRootZone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewZoneHandler(zone)
+	handler, err := NewZoneHandler(z)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,5 +250,60 @@ func TestZoneHandlerRootZone(t *testing.T) {
 	got = ask(t, handler, "absent.", dnsmessage.TypeA)
 	if got.RCode != dnsmessage.RCodeNameError || !got.Authoritative {
 		t.Fatal("root zone not authoritative")
+	}
+}
+
+func TestConcurrentBorrowedRecordEncoding(t *testing.T) {
+	z := newTestZone(t, "home.arpa.", record("app.home.arpa.", dnsmessage.TypeTXT, &dnsmessage.TXTResource{TXT: []string{"hello", "world"}}))
+	handler, err := NewZoneHandler(z)
+	if err != nil {
+		t.Fatal(err)
+	}
+	questions := []dnsmessage.Question{
+		{Name: dnsmessage.MustNewName("app.home.arpa."), Type: dnsmessage.TypeTXT, Class: dnsmessage.ClassINET},
+		{Name: dnsmessage.MustNewName("home.arpa."), Type: dnsmessage.TypeSOA, Class: dnsmessage.ClassINET},
+		{Name: dnsmessage.MustNewName("missing.home.arpa."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET},
+	}
+	var workers sync.WaitGroup
+	for range 6 {
+		workers.Go(func() {
+			for i := range 120 {
+				question := questions[i%len(questions)]
+				response, err := handler.Handle(t.Context(), dnsmessage.Message{Questions: []dnsmessage.Question{question}})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				packet, err := response.Pack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				var decoded dnsmessage.Message
+				if err := decoded.Unpack(packet); err != nil {
+					t.Error(err)
+					return
+				}
+				if question.Type == dnsmessage.TypeA {
+					if decoded.RCode != dnsmessage.RCodeNameError || len(decoded.Authorities) != 1 || decoded.Authorities[0].Header.TTL != 60 {
+						t.Error("incorrect negative SOA")
+						return
+					}
+				} else if decoded.RCode != dnsmessage.RCodeSuccess || len(decoded.Answers) != 1 || decoded.Answers[0].Header.TTL != 300 {
+					t.Error("incorrect positive answer after encoding")
+					return
+				} else if question.Type == dnsmessage.TypeTXT {
+					body := decoded.Answers[0].Body.(*dnsmessage.TXTResource)
+					if len(body.TXT) != 2 || body.TXT[0] != "hello" || body.TXT[1] != "world" {
+						t.Error("encoding changed TXT data")
+						return
+					}
+				}
+			}
+		})
+	}
+	workers.Wait()
+	if z.SOA().Header.TTL != 300 {
+		t.Fatal("negative answers changed the stored SOA TTL")
 	}
 }

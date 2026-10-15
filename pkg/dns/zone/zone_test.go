@@ -153,7 +153,7 @@ func TestRecordKeyIndex(t *testing.T) {
 				t.Fatalf("got %d records, want %d", len(records), tc.count)
 			}
 			for _, record := range records {
-				owner, err := fqdn(record.Header.Name.String())
+				owner, err := FQDN(record.Header.Name.String())
 				if err != nil || owner != tc.name || record.Header.Type != tc.typ {
 					t.Fatal("RRset contains a record with a different key")
 				}
@@ -169,4 +169,38 @@ func TestCNAMECanHaveDescendants(t *testing.T) {
 		record("child.alias.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{}),
 		record("alias.home.arpa.", dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("target.home.arpa.")}),
 	)
+}
+
+func TestZoneLookup(t *testing.T) {
+	txt := &dnsmessage.TXTResource{TXT: []string{"hello"}}
+	z := newTestZone(t, "HOME.ARPA.",
+		record("app.home.arpa.", dnsmessage.TypeTXT, txt),
+		record("api.apps.home.arpa.", dnsmessage.TypeA, &dnsmessage.AResource{}),
+	)
+	for _, tc := range []struct {
+		name   string
+		typ    dnsmessage.Type
+		exists bool
+		count  int
+	}{
+		{"APP.Home.ARPA.", dnsmessage.TypeTXT, true, 1},
+		{"app.home.arpa.", dnsmessage.TypeAAAA, true, 0},
+		{"apps.home.arpa.", dnsmessage.TypeA, true, 0},
+		{"missing.home.arpa.", dnsmessage.TypeA, false, 0},
+		{"example.com.", dnsmessage.TypeA, false, 0},
+		{"relative", dnsmessage.TypeA, false, 0},
+	} {
+		t.Run(fmt.Sprintf("%s/%d", tc.name, tc.typ), func(t *testing.T) {
+			records, exists := z.Lookup(tc.name, tc.typ)
+			if exists != tc.exists || len(records) != tc.count {
+				t.Fatalf("got %d records, exists=%v", len(records), exists)
+			}
+			if len(records) > 0 && records[0].Body != txt {
+				t.Fatal("Lookup did not return the borrowed body")
+			}
+		})
+	}
+	if z.Origin() != "home.arpa." || z.SOA().Header.Type != dnsmessage.TypeSOA || z.SOA().Header.TTL != 300 {
+		t.Fatal("incorrect zone metadata")
+	}
 }

@@ -22,7 +22,7 @@ type Zone struct {
 // Names must be absolute (end in a dot). The apex must contain exactly one SOA
 // and at least one NS record. Callers must not mutate supplied record data.
 func NewZone(origin string, records []dnsmessage.Resource) (*Zone, error) {
-	name, err := fqdn(origin)
+	name, err := FQDN(origin)
 	if err != nil {
 		return nil, fmt.Errorf("zone origin: %w", err)
 	}
@@ -50,7 +50,7 @@ func NewZone(origin string, records []dnsmessage.Resource) (*Zone, error) {
 // Add validates and indexes a record without cloning its body. It is not safe
 // for concurrent use and must not be called after installing the zone in a handler.
 func (z *Zone) Add(record dnsmessage.Resource) error {
-	owner, err := fqdn(record.Header.Name.String())
+	owner, err := FQDN(record.Header.Name.String())
 	if err != nil {
 		return err
 	}
@@ -106,7 +106,7 @@ func (z *Zone) Add(record dnsmessage.Resource) error {
 		targets = []dnsmessage.Name{body.PTR}
 	}
 	for _, target := range targets {
-		if _, err := fqdn(target.String()); err != nil {
+		if _, err := FQDN(target.String()); err != nil {
 			return fmt.Errorf("owner %s: invalid target: %w", owner, err)
 		}
 	}
@@ -171,7 +171,7 @@ func (z *Zone) Validate() error {
 			default:
 				continue
 			}
-			name, _ := fqdn(target.String()) // Already validated by add.
+			name, _ := FQDN(target.String()) // Already validated by Add.
 			if len(z.records[RecordKey{name: name, typ: dnsmessage.TypeCNAME}]) != 0 {
 				return fmt.Errorf("owner %s: NS/MX/SRV target %s must not be a CNAME", key.name, name)
 			}
@@ -183,4 +183,27 @@ func (z *Zone) Validate() error {
 
 func (z *Zone) Has(name string) bool {
 	return z.origin == "." || name == z.origin || strings.HasSuffix(name, "."+z.origin)
+}
+
+// Origin returns the zone's canonical absolute origin.
+func (z *Zone) Origin() string {
+	return z.origin
+}
+
+// Lookup returns the RRset for name and whether the name exists, including empty
+// intermediate names. Names are absolute and matched case-insensitively. Invalid
+// names return no records and false. The returned records and bodies are borrowed
+// and must not be mutated.
+func (z *Zone) Lookup(name string, typ dnsmessage.Type) ([]dnsmessage.Resource, bool) {
+	name, err := FQDN(name)
+	if err != nil {
+		return nil, false
+	}
+
+	return z.records[RecordKey{name, typ}], z.names[name]
+}
+
+// SOA returns the zone's SOA record. Its body is borrowed and must not be mutated.
+func (z *Zone) SOA() dnsmessage.Resource {
+	return z.soa
 }

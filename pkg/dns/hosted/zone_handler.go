@@ -1,9 +1,10 @@
-package zone
+package hosted
 
 import (
 	"context"
 	"sync"
 
+	"github.com/koreanmelon/lantern/pkg/dns/zone"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -13,11 +14,11 @@ import (
 // all queries. It must not be copied after first use.
 type ZoneHandler struct {
 	mu    sync.RWMutex
-	zones []*Zone
+	zones []*zone.Zone
 }
 
 // NewZoneHandler validates and installs an initial set of zones.
-func NewZoneHandler(zones ...*Zone) (*ZoneHandler, error) {
+func NewZoneHandler(zones ...*zone.Zone) (*ZoneHandler, error) {
 	h := &ZoneHandler{}
 	if err := h.ReplaceZones(zones...); err != nil {
 		return nil, err
@@ -31,7 +32,7 @@ func NewZoneHandler(zones ...*Zone) (*ZoneHandler, error) {
 // their record data must not be mutated.
 // With no arguments it removes all zones. Concurrent replacements are safe;
 // the last assignment wins. Callers composing edits must coordinate them.
-func (h *ZoneHandler) ReplaceZones(zones ...*Zone) error {
+func (h *ZoneHandler) ReplaceZones(zones ...*zone.Zone) error {
 	replacement, err := prepareZones(zones)
 	if err != nil {
 		return err
@@ -85,7 +86,7 @@ func validateQuestion(query dnsmessage.Message) (string, dnsmessage.RCode) {
 	if question.Class != dnsmessage.ClassINET {
 		return "", dnsmessage.RCodeRefused
 	}
-	name, err := fqdn(question.Name.String())
+	name, err := zone.FQDN(question.Name.String())
 	if err != nil {
 		return "", dnsmessage.RCodeFormatError
 	}

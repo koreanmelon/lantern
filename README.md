@@ -34,7 +34,8 @@ LAN address is explicit; do not expose the service to the public internet.
 ## Structure
 
 - `cmd/lantern`: process startup and shutdown; eventually wires DNS and DHCP.
-- `pkg/dns/zone`: validated read-only zone data, zone handler, and record lookup.
+- `pkg/dns/zone`: validated read-only zone data and single-zone record access.
+- `pkg/dns/hosted`: zone selection, query handling, CNAME traversal, and DNS answers.
 - `pkg/dns/server`: UDP/TCP transport and request processing, using
   `dnsmessage.Message.Unpack` directly (package name `dnsserver`).
 - `tests/integration`: black-box socket tests, built with the `integration` tag.
@@ -58,7 +59,7 @@ replacement zone instead. Wire-format validation is retained during construction
 Queries match names case-insensitively, preserving the original question.
 Identical duplicate records should be avoided; they are not deduplicated automatically.
 
-`zone.NewZoneHandler(zones...)` returns a handler for configured zones. The most specific zone
+`hosted.NewZoneHandler(zones...)` returns a handler for configured zones. The most specific zone
 wins when origins overlap. Intermediate names with descendants exist even if they
 have no records. Negative SOA TTLs use the lesser of the SOA TTL and its MinTTL.
 CNAME chains are followed within configured zones up to 16 links; loops or longer
@@ -98,7 +99,7 @@ negative answers until their TTLs expire.
 All server settings are in `dnsserver.Config`, including the handler function:
 
 ```go
-authority, err := zone.NewZoneHandler(configuredZone)
+authority, err := hosted.NewZoneHandler(configuredZone)
 if err != nil {
     return err
 }
