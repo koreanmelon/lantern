@@ -227,7 +227,7 @@ through text forms; use the Go API for those records.
 ## Structure
 
 - `cmd/lantern`: Cobra CLI and process startup/shutdown; eventually wires DHCP.
-- `internal/config`: typed startup configuration loaded through Viper.
+- `pkg/config`: typed startup configuration loaded through Viper.
 - `configs/`: canonical sample/default startup configuration.
 - `init/`: systemd unit configuration.
 - `build/package/`: nFPM package definition.

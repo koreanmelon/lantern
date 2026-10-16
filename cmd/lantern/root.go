@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/koreanmelon/lantern/internal/config"
+	"github.com/koreanmelon/lantern/pkg/config"
 	"github.com/spf13/cobra"
 )
 

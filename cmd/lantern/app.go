@@ -7,7 +7,7 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/koreanmelon/lantern/internal/config"
+	"github.com/koreanmelon/lantern/pkg/config"
 	"github.com/koreanmelon/lantern/pkg/dns/server"
 	"github.com/koreanmelon/lantern/pkg/webui"
 )

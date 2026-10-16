@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/koreanmelon/lantern/internal/config"
+	"github.com/koreanmelon/lantern/pkg/config"
 )
 
 func TestRootCommand(t *testing.T) {
