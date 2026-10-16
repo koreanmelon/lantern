@@ -31,12 +31,51 @@ Ctrl-C stops both listeners and closes
 active connections. Port 1053 does not require elevated privileges. Binding to a
 LAN address is explicit; do not expose the service to the public internet.
 
+## Record manager
+
+Open **http://127.0.0.1:8080** for the dashboard. The application serves DNS and
+the dashboard together; Ctrl-C shuts down both.
+
+The dashboard is implemented entirely in Go with `net/http`, `html/template`, and
+Go string assets. There is no JavaScript, frontend build step, CDN, or additional
+dependency. It includes a responsive record table, search/type filters, add/edit
+forms, deletion, a record-format reference, and inline validation errors. All
+nine supported types can be managed, including the apex SOA and NS. The full zone
+is validated before each change. Concurrent edits use revisions, so stale tabs
+receive a conflict instead of overwriting newer data. Changes immediately reach
+the running DNS service, but client-side DNS caches still follow TTLs.
+
+**Edits are in memory and reset on restart.** There is no persistence or import
+pipeline yet. The UI displays this limitation. SOA serials are editable and are
+not automatically incremented on other record changes.
+
+```sh
+go run ./cmd/lantern --dns-listen 127.0.0.1:1053 --web-listen 127.0.0.1:8080
+# Deliberate trusted-LAN exposure (example Pi address):
+go run ./cmd/lantern --dns-listen 192.168.1.2:53 --web-listen 192.168.1.2:8080
+```
+
+There is **no authentication, authorization, or HTTPS** on the dashboard. Keep
+the default loopback bind or explicitly bind an address on a trusted network;
+do not expose it publicly. Cross-origin POST checks and an HTTP Host allowlist
+protect against common browser attacks, but are not access controls. Access the
+UI using loopback names or the explicit hostname/IP supplied to `--web-listen`.
+Wildcard binds do not automatically trust arbitrary Host headers. Embedders can
+pass additional trusted names to `webui.New`; forwarded headers are not trusted.
+
+Record owner names can be short (`grafana`), absolute (`grafana.home.arpa.`), or
+`@` for the apex. Target names without a trailing dot are relative to the zone.
+TXT accepts literal UTF-8 text or a JSON array of strings for multiple chunks,
+each at most 255 bytes. Non-UTF-8 record data can be viewed, but is not editable
+through text forms; use the Go API for those records.
+
 ## Structure
 
 - `cmd/lantern`: process startup and shutdown; eventually wires DNS and DHCP.
 - `pkg/dns/zone`: synchronized single-zone record storage, validation, and query handling.
 - `pkg/dns/server`: UDP/TCP transport and request processing, using
   `dnsmessage.Message.Unpack` directly (package name `dnsserver`).
+- `pkg/webui`: server-rendered record manager with built-in templates and CSS.
 - `tests/integration`: black-box socket tests, built with the `integration` tag.
 
 ## Zones
@@ -91,8 +130,8 @@ replace them with a smaller set that still contains the required SOA and NS.
 Concurrent replacements are safe, with the last assignment winning. Applications
 composing edits must serialize them or implement revision checks to avoid lost
 updates. Do not copy a `Zone` after first use. Its zero value refuses queries;
-use `NewZone` before adding or replacing records. There is no UI, file
-watcher, or persistence layer yet. DNS caches can retain previous positive and
+use `NewZone` before adding or replacing records. There is no file watcher or
+persistence layer yet. DNS caches can retain previous positive and
 negative answers until their TTLs expire.
 
 All server settings are in `dnsserver.Config`, including the handler function:

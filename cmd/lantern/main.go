@@ -11,7 +11,7 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
-	cmd := newRootCommand(serveDNS)
+	cmd := newRootCommand(serveApplication)
 	err := cmd.ExecuteContext(ctx)
 
 	stop()
