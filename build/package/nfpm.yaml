@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+# Run from the repository root. Export VERSION, ARCH, and MAINTAINER first.
+# ARCH uses nFPM's Go-style names: arm64 or arm7 (Debian arm64 or armhf).
+# The binary in dist/${ARCH}/lantern must already be compiled for that target.
+name: lantern
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+release: "1"
+maintainer: "${MAINTAINER}"
+description: |
+  Local authoritative DNS server and web record manager.
+  Serves a local DNS zone over UDP/TCP and provides a Go-rendered dashboard.
+  Web edits are currently in memory and reset when the process restarts.
+section: net
+priority: optional
+depends:
+  - systemd (>= 235)
+
+# No maintainer scripts: installation does not enable/start/restart the service.
+# Administrators explicitly manage daemon-reload and service lifecycle.
+contents:
+  - src: "dist/${ARCH}/lantern"
+    dst: /usr/bin/lantern
+    expand: true
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: configs/lantern.yaml
+    dst: /etc/lantern/lantern.yaml
+    type: config
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: init/lantern.service
+    dst: /usr/lib/systemd/system/lantern.service
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: README.md
+    dst: /usr/share/doc/lantern/README.md
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+
+deb:
+  compression: gzip

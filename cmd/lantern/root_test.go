@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/koreanmelon/lantern/internal/config"
 )
 
 func TestRootCommand(t *testing.T) {
@@ -23,11 +27,14 @@ func TestRootCommand(t *testing.T) {
 		{name: "unknown flag", args: []string{"--unknown"}, wantError: true},
 		{name: "missing flag value", args: []string{"--dns-listen"}, wantError: true},
 		{name: "help", args: []string{"--help"}},
+		{name: "help skips config loading", args: []string{"--config", "/does/not/exist.yaml", "--help"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			cleanConfigEnv(t)
 			called := false
 			ctx := t.Context()
-			cmd := newRootCommand(func(gotCtx context.Context, address, webAddress string) error {
+			cmd := newRootCommand(func(gotCtx context.Context, cfg config.Config) error {
+				address, webAddress := cfg.DNS.Address, cfg.Web.Address
 				called = true
 				wantWeb := tc.webAddress
 				if wantWeb == "" {
@@ -60,8 +67,9 @@ func TestRootCommand(t *testing.T) {
 }
 
 func TestRootCommandReturnsServerError(t *testing.T) {
+	cleanConfigEnv(t)
 	want := errors.New("listen failed")
-	cmd := newRootCommand(func(context.Context, string, string) error { return want })
+	cmd := newRootCommand(func(context.Context, config.Config) error { return want })
 	var output bytes.Buffer
 	cmd.SetOut(&output)
 	cmd.SetErr(&output)
@@ -71,5 +79,55 @@ func TestRootCommandReturnsServerError(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "Usage:") || strings.Contains(output.String(), "Error:") {
 		t.Fatal("Cobra printed duplicate error or usage output")
+	}
+}
+
+func cleanConfigEnv(t *testing.T) {
+	t.Helper()
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(key, "LANTERN_") {
+			t.Setenv(key, "")
+			if err := os.Unsetenv(key); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestRootCommandLoadsConfiguration(t *testing.T) {
+	cleanConfigEnv(t)
+	path := filepath.Join(t.TempDir(), "lantern.yaml")
+	if err := os.WriteFile(path, []byte("dns:\n  address: 127.0.0.1:2053\n  concurrency: 23\nweb:\n  address: 127.0.0.1:8081\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LANTERN_WEB_ADDRESS", "127.0.0.1:8082")
+	called := false
+	cmd := newRootCommand(func(_ context.Context, cfg config.Config) error {
+		called = true
+		if cfg.DNS.Address != "127.0.0.1:3053" || cfg.DNS.Concurrency != 23 || cfg.Web.Address != "127.0.0.1:8082" {
+			t.Fatalf("incorrect resolved settings: %+v", cfg)
+		}
+		return nil
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	cmd.SetArgs([]string{"--config", path, "--dns-listen", "127.0.0.1:3053"})
+	if err := cmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !called || !strings.Contains(output.String(), "127.0.0.1:8082") {
+		t.Fatal("startup did not use/log effective configuration")
+	}
+}
+
+func TestRootCommandDoesNotStartWithBadConfiguration(t *testing.T) {
+	cleanConfigEnv(t)
+	called := false
+	cmd := newRootCommand(func(context.Context, config.Config) error { called = true; return nil })
+	cmd.SetArgs([]string{"--config", filepath.Join(t.TempDir(), "missing.yaml")})
+	if err := cmd.ExecuteContext(t.Context()); err == nil || called {
+		t.Fatal("bad configuration did not prevent startup")
 	}
 }

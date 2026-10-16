@@ -31,6 +31,161 @@ Ctrl-C stops both listeners and closes
 active connections. Port 1053 does not require elevated privileges. Binding to a
 LAN address is explicit; do not expose the service to the public internet.
 
+## Startup configuration
+
+Lantern uses Viper at the application boundary. The DNS server and record manager
+receive typed settings, not a Viper instance. Existing flags still work:
+
+```sh
+go run ./cmd/lantern --config configs/lantern.yaml
+LANTERN_DNS_ADDRESS=127.0.0.1:2053 go run ./cmd/lantern --config configs/lantern.yaml
+go run ./cmd/lantern --config configs/lantern.yaml --web-listen 127.0.0.1:8081
+```
+
+Precedence is **explicit flags > environment > configuration file > defaults**.
+Unchanged flag defaults do not override the file. Files are optional: without
+`--config`, only defaults, environment variables, and flags are used. There is no
+automatic search in the working directory or home directory. An explicitly named
+missing file, malformed file, unknown key, or invalid setting fails startup before
+listeners open. `--help` does not load configuration.
+
+See [`configs/lantern.yaml`](configs/lantern.yaml) for every
+setting and its default. YAML, JSON, and TOML files are supported. Durations use
+Go units such as `500ms`, `10s`, or `1m`, not bare numbers. Application timeouts,
+concurrency, and HTTP header limits must be positive. All startup settings have
+environment equivalents: prefix the dotted key with `LANTERN_`, uppercase it,
+and replace dots with underscores:
+
+```sh
+export LANTERN_DNS_READ_TIMEOUT=3s
+export LANTERN_DNS_CONCURRENCY=20
+export LANTERN_WEB_ALLOWED_HOSTS=pi.home.arpa,lantern.example.ts.net
+```
+
+Host entries are trusted names or IP literals, without a URL scheme, port, or
+wildcard. IPv6 literals in `web.allowed_hosts` have no brackets; listen addresses
+use normal `[IPv6]:port` syntax. Unknown environment variables are ignored.
+Explicit empty environment values are not silently replaced by file/default
+values: an empty address is invalid, while an empty allowed-host list clears it.
+Configuration is loaded once at startup; restart Lantern to apply file changes.
+
+**Viper configures the process; it does not save DNS records.** Startup records
+remain defined in Go, and UI edits still reset on restart.
+
+## Debian packaging
+
+Packaging follows the [Go project-layout conventions](https://github.com/golang-standards/project-layout):
+
+```text
+configs/lantern.yaml       Default/sample startup config; installed as a conffile
+init/lantern.service       Canonical systemd unit
+build/package/nfpm.yaml    nFPM metadata and file mappings
+dist/<architecture>/       Generated binaries (gitignored)
+dist/*.deb                Generated packages (gitignored)
+```
+
+Build from the repository root using [nFPM](https://nfpm.goreleaser.com/docs/install/).
+It is a build tool, not an application dependency. The manifest references the
+canonical config and unit directly; no duplicate packaging copies are maintained.
+For a 64-bit Pi OS:
+
+```sh
+export VERSION=0.1.0
+export ARCH=arm64
+export MAINTAINER='Your Name <you@example.com>' # Replace with your actual details.
+mkdir -p "dist/$ARCH"
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o "dist/$ARCH/lantern" ./cmd/lantern
+nfpm package --config build/package/nfpm.yaml --packager deb --target dist/
+```
+
+For a 32-bit Pi 3 OS, use `ARCH=arm7` and compile with `GOOS=linux GOARCH=arm
+GOARM=7 CGO_ENABLED=0` to `dist/arm7/lantern`. nFPM maps `arm7` to Debian `armhf`;
+`arm64` remains `arm64`. Match the Pi's OS (`dpkg --print-architecture`), not merely
+the CPU. The build architecture must agree with the manifest architecture—nFPM
+does not compile or verify the input executable for you. Set all three exported
+metadata variables before packaging. To use a pinned tool without installing it:
+
+```sh
+go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0 package \
+  --config build/package/nfpm.yaml --packager deb --target dist/
+```
+
+The package revision is `1`, so version `0.1.0` produces
+`lantern_0.1.0-1_arm64.deb` (or `_armhf.deb`). Change the package revision when
+repackaging the same upstream version. Files are root-owned with explicit modes:
+
+| Source | Installed destination |
+|---|---|
+| `dist/$ARCH/lantern` | `/usr/bin/lantern` (0755) |
+| `configs/lantern.yaml` | `/etc/lantern/lantern.yaml` (0644, Debian conffile) |
+| `init/lantern.service` | `/usr/lib/systemd/system/lantern.service` (0644) |
+| `README.md` | `/usr/share/doc/lantern/README.md` (0644) |
+
+The conffile designation lets dpkg preserve administrator edits during upgrades
+(or prompt about changes). No Go runtime is required on the target. This package
+targets systemd-based Debian installations and declares `systemd (>= 235)`.
+There are no maintainer scripts or implicit service actions. No project license
+is currently declared; choose the appropriate license before public distribution.
+
+On a Debian machine, inspect the result with `dpkg-deb --info` and
+`dpkg-deb --contents` before installing. There is also an opt-in, cross-platform
+archive test (no installation or target execution) that checks the package's
+config/unit against their canonical sources, conffile registration, file modes,
+root ownership, lack of lifecycle scripts, and static ELF architecture:
+
+```sh
+LANTERN_DEB_FILE="$PWD/dist/lantern_0.1.0-1_arm64.deb" \
+  go test -tags=integration ./tests/integration -run '^TestDebianPackage$' -v
+```
+
+The normal integration suite skips that test unless `LANTERN_DEB_FILE` is set.
+Building or inspecting packages does not install them or alter system services.
+
+## Running under systemd
+
+[`init/lantern.service`](init/lantern.service) is the canonical Linux system unit.
+It runs as an unprivileged dynamic user, grants only `CAP_NET_BIND_SERVICE` for
+port 53, uses a read-only filesystem sandbox, logs to journald, and restarts on
+failure. `SIGTERM` is already handled by Lantern's coordinated shutdown. Keep
+`TimeoutStopSec` longer than your configured `shutdown_timeout`.
+
+When ready, copy the matching `.deb` to the Pi and run from the directory
+containing it (these commands are not run automatically):
+
+```sh
+sudo apt install ./lantern_0.1.0-1_arm64.deb # Use the matching architecture/version.
+# Review /etc/lantern/lantern.yaml before enabling the service.
+sudo systemctl daemon-reload
+sudo systemctl enable --now lantern
+sudo systemctl status lantern
+sudo journalctl -u lantern -f
+```
+
+For an upgrade, review configuration, run `systemctl daemon-reload`, then restart
+the service deliberately to use the new executable/unit. Stop and disable the
+service before package removal; after removing it, reload systemd. This minimal
+package does not perform those lifecycle actions automatically. Existing units
+under `/etc/systemd/system/lantern.service` override the packaged unit: inspect
+`systemctl cat lantern` and migrate any older `/usr/local/bin/lantern` unit rather
+than silently overwriting administrator configuration.
+
+Build on the Pi, or cross-compile for its **OS architecture**: `GOOS=linux
+GOARCH=arm64` for a 64-bit OS, or `GOOS=linux GOARCH=arm GOARM=7` for a 32-bit
+Pi 3 OS. Configure the Pi's static IP in Linux separately. Verify that no existing
+service owns the chosen DNS/HTTP addresses. The sample configuration intentionally
+keeps DNS on loopback port 1053 and the UI on loopback port 8080; change DNS to
+`192.168.1.2:53` deliberately when ready for LAN clients. The dashboard still has
+no authentication: keep it loopback-only or on a trusted network. For remote
+administration without exposing it, an SSH tunnel is an option:
+
+```sh
+ssh -L 8080:127.0.0.1:8080 pi@192.168.1.2
+```
+
+**Record persistence is not implemented yet.** Automatic service restarts restore
+the startup records, not your last UI edits. This unit/configuration support does
+not make those edits durable. No systemd service is installed by the application.
+
 ## Record manager
 
 Open **http://127.0.0.1:8080** for the dashboard. The application serves DNS and
@@ -71,7 +226,11 @@ through text forms; use the Go API for those records.
 
 ## Structure
 
-- `cmd/lantern`: process startup and shutdown; eventually wires DNS and DHCP.
+- `cmd/lantern`: Cobra CLI and process startup/shutdown; eventually wires DHCP.
+- `internal/config`: typed startup configuration loaded through Viper.
+- `configs/`: canonical sample/default startup configuration.
+- `init/`: systemd unit configuration.
+- `build/package/`: nFPM package definition.
 - `pkg/dns/zone`: synchronized single-zone record storage, validation, and query handling.
 - `pkg/dns/server`: UDP/TCP transport and request processing, using
   `dnsmessage.Message.Unpack` directly (package name `dnsserver`).
@@ -183,8 +342,9 @@ UDP requests/TCP connections by default. Timeouts are independently configurable
 
 The default address is `127.0.0.1:1053`. Startup populates zero-valued settings
 in `Config` from the package's default constants via `Normalize`, which also
-rejects negative timeouts/concurrency. The command currently sets all three
-timeouts to 10 seconds and concurrency to 10. Both listeners bind to the same
+rejects negative timeouts/concurrency. The application's default settings use all
+three timeouts of 10 seconds and concurrency of 10; Viper configuration can
+override them. Both listeners bind to the same
 numeric port, including when `Address` specifies port zero.
 Handlers must honor cancellation; Go cannot forcibly terminate handler code.
 

@@ -1,0 +1,27 @@
+# Default/sample startup settings. DNS records still start from cmd/lantern/zone.go;
+# record-manager edits are in memory and do not survive process restarts.
+# Precedence: changed flags > LANTERN_* environment > this file > defaults.
+# Durations require units and must be positive. No live file reload is performed.
+
+dns:
+  # For the Pi, deliberately change this to 192.168.1.2:53 when ready.
+  address: "127.0.0.1:1053"
+  read_timeout: 10s
+  write_timeout: 10s
+  handler_timeout: 10s
+  concurrency: 10
+
+web:
+  # No authentication or HTTPS. Keep loopback or use a trusted LAN address.
+  address: "127.0.0.1:8080"
+  # Additional trusted HTTP Host names/IPs, without schemes, ports, or wildcards.
+  # The explicit listen host and loopback names are already accepted.
+  allowed_hosts: []
+  read_header_timeout: 5s
+  read_timeout: 10s
+  write_timeout: 10s
+  idle_timeout: 1m
+  max_header_bytes: 16384
+
+# Keep systemd's TimeoutStopSec longer than this value.
+shutdown_timeout: 5s
