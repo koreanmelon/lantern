@@ -24,6 +24,7 @@ func Load(path string, flags *pflag.FlagSet) (Config, error) {
 	v.AllowEmptyEnv(true)
 	defaults := Defaults()
 	settings := map[string]any{
+		"records_file":            defaults.RecordsFile,
 		"dns.address":             defaults.DNS.Address,
 		"dns.read_timeout":        defaults.DNS.ReadTimeout,
 		"dns.write_timeout":       defaults.DNS.WriteTimeout,

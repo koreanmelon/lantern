@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -349,5 +351,53 @@ func TestStaleIndexedMutationDoesNotTouchAnotherRecord(t *testing.T) {
 		if records, _ := z.Lookup(name, dnsmessage.TypeA); len(records) != 1 {
 			t.Fatalf("stale mutation changed %s", name)
 		}
+	}
+}
+
+func TestWebPersistenceAndFailedSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.json")
+	z := testZone(t)
+	if err := z.EnablePersistence(path); err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(z, "lantern.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := send(h, http.MethodGet, "/", nil)
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Saved before it goes live") {
+		t.Fatal("persistent status not shown")
+	}
+	values := url.Values{"revision": {revision(z)}, "name": {"saved"}, "type": {"A"}, "ttl": {"60"}, "value": {"192.0.2.8"}}
+	if response := send(h, http.MethodPost, "/records", values); response.Code != http.StatusSeeOther {
+		t.Fatalf("save: %d %s", response.Code, response.Body.String())
+	}
+	restored := testZone(t)
+	if err := restored.EnablePersistence(path); err != nil {
+		t.Fatal(err)
+	}
+	if records, _ := restored.Lookup("saved.home.arpa.", dnsmessage.TypeA); len(records) != 1 || records[0].Body.(*dnsmessage.AResource).A[3] != 8 {
+		t.Fatal("web edit did not survive reload")
+	}
+	// Use only the restored zone from here: one live owner per record file.
+	h, err = New(restored, "lantern.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := revision(restored)
+	if err := os.Rename(path, path+".backup"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	values.Set("revision", version)
+	values.Set("name", "unsaved")
+	response := send(h, http.MethodPost, "/records", values)
+	if response.Code != http.StatusUnprocessableEntity || revision(restored) != version {
+		t.Fatal("failed disk save was reported as success")
+	}
+	if _, exists := restored.Lookup("unsaved.home.arpa.", dnsmessage.TypeA); exists {
+		t.Fatal("failed disk save changed live DNS data")
 	}
 }

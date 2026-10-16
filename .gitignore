@@ -1,2 +1,6 @@
 # Generated binaries and OS packages.
 /dist/
+
+# Local record state (may contain private network data).
+/records.json
+/.lantern-records-*

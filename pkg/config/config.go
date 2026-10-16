@@ -12,6 +12,7 @@ import (
 )
 
 type Config struct {
+	RecordsFile     string        `mapstructure:"records_file"`
 	DNS             DNS           `mapstructure:"dns"`
 	Web             Web           `mapstructure:"web"`
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
@@ -39,6 +40,7 @@ type Web struct {
 // DNS transport's independent defaults. Listen addresses stay loopback-only.
 func Defaults() Config {
 	return Config{
+		RecordsFile:     "records.json",
 		DNS:             DNS{Address: "127.0.0.1:1053", ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, HandlerTimeout: 10 * time.Second, Concurrency: 10},
 		Web:             Web{Address: "127.0.0.1:8080", AllowedHosts: []string{}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10},
 		ShutdownTimeout: 5 * time.Second,
@@ -48,6 +50,9 @@ func Defaults() Config {
 // Validate rejects invalid startup settings without resolving hostnames or
 // opening sockets. Application timeouts must be positive; zero does not disable them.
 func (c Config) Validate() error {
+	if strings.TrimSpace(c.RecordsFile) == "" || strings.ContainsAny(c.RecordsFile, "\x00\r\n") {
+		return fmt.Errorf("records_file must be a non-empty file path")
+	}
 	for _, field := range []struct{ name, address string }{{"dns.address", c.DNS.Address}, {"web.address", c.Web.Address}} {
 		host, port, err := net.SplitHostPort(field.address)
 		if err != nil {

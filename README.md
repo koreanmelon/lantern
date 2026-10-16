@@ -13,7 +13,7 @@ dig @127.0.0.1 -p 1053 missing.home.arpa A
 dig @127.0.0.1 -p 1053 example.com A
 ```
 
-The example zone is defined in `cmd/lantern/zone.go`, not a configuration file:
+On first start, a missing record file is seeded from `cmd/lantern/zone.go`:
 
 - `home.arpa.` has SOA and NS records.
 - `lantern.home.arpa.` has A address `192.168.1.2` (TTL 60 seconds).
@@ -22,8 +22,9 @@ The example zone is defined in `cmd/lantern/zone.go`, not a configuration file:
   `REFUSED`. Existing names without a requested type receive `NOERROR` with no
   matching answers (NODATA). Negative answers include the zone SOA.
 
-The address is an example, not automatic interface discovery. Add or change records
-in Go for now. Do not configure this as a general-purpose DNS resolver: use split
+The address is an example, not automatic interface discovery. Existing saved
+records take precedence on later starts; use the UI to change them. Do not
+configure this as a general-purpose DNS resolver: use split
 DNS to route only the zones it owns to Lantern, leaving public DNS to another
 resolver. Advertising an NS record does not itself configure split DNS or delegation.
 
@@ -69,8 +70,51 @@ Explicit empty environment values are not silently replaced by file/default
 values: an empty address is invalid, while an empty allowed-host list clears it.
 Configuration is loaded once at startup; restart Lantern to apply file changes.
 
-**Viper configures the process; it does not save DNS records.** Startup records
-remain defined in Go, and UI edits still reset on restart.
+**Viper configures the process, including the `records_file` path; record data
+lives in a separate JSON file.** The default is `records.json` relative to the
+process working directory, not the startup config's directory. Override it with
+an absolute path or `LANTERN_RECORDS_FILE`. Do not point it at the startup YAML.
+
+## Record persistence
+
+Lantern loads the record file before opening listeners. A missing file is seeded
+once with the example zone. An invalid, incompatible, oversized, or wrong-zone
+file fails startup and is never silently replaced with defaults. The format has
+`version`, `origin`, `revision`, and a list of records. Normal records are readable:
+
+```json
+{
+  "name": "grafana.home.arpa.",
+  "type": "A",
+  "ttl": 60,
+  "data": "192.168.1.20"
+}
+```
+
+That is one record, not a complete file: retain the top-level metadata and required
+SOA/NS records. Data is an IP/name string for address and alias records, an array
+of strings for TXT, or an object for MX/SRV/SOA. For rare non-UTF-8 names or TXT
+chunks, a `wire` base64 fallback preserves a single DNS record losslessly instead
+of replacing binary bytes. Prefer the UI; if editing the JSON manually, stop
+Lantern first, preserve its metadata, and restart to validate and load the file.
+There is no file watcher. Maximum file size is 16 MiB. Schema field names are
+lower-case ASCII; unknown/duplicate fields, null values, and missing structured
+record fields are rejected instead of silently becoming zero or empty data.
+
+All zone mutation methods—including UI edits, `Add`, and revision-checked
+replacement—serialize competing updates and save before publishing new DNS data.
+Writes use a same-directory temporary file, file sync, and atomic rename. Failure
+before rename leaves the live zone and revision unchanged; a failed UI save is
+reported rather than pretending it was applied. Directory sync is best-effort
+after rename, the commit point; power-loss guarantees depend on the filesystem
+and storage hardware. Record files use mode 0600 and new parent directories 0700.
+Keep backups and use **one running process per record file**; there is no
+cross-process locking. Do not modify borrowed record-body pointers externally.
+
+Revisions survive restarts and advance at startup, so old browser forms cannot
+overwrite newer data. The default local state file and temporary files are
+gitignored. Embedders can keep a zone in memory by not calling
+`Zone.EnablePersistence`; the application enables it automatically.
 
 ## Debian packaging
 
@@ -141,11 +185,52 @@ LANTERN_DEB_FILE="$PWD/dist/lantern_0.1.0-1_arm64.deb" \
 The normal integration suite skips that test unless `LANTERN_DEB_FILE` is set.
 Building or inspecting packages does not install them or alter system services.
 
+## GitHub Releases
+
+`.github/workflows/ci.yml` checks formatting, module files, vet, and race-enabled
+unit/integration tests on pull requests, pushes to `main`, and manual runs. The
+release workflow reuses these checks for tagged source.
+
+Before releasing, set repository **Actions variable** `PACKAGE_MAINTAINER` to
+your actual `Name <email>` in Settings → Secrets and variables → Actions →
+Variables. It becomes public Debian package metadata; it is not a credential.
+No PAT is needed: only the draft-creation job receives `contents: write` through
+the built-in token. Organization policy must permit that job permission.
+
+Merge the workflows first, then tag a commit containing them (commands below
+are a procedure, not something the application runs):
+
+```sh
+git tag -a v0.1.0 -m 'Lantern v0.1.0'
+git push origin v0.1.0
+```
+
+Only stable `vMAJOR.MINOR.PATCH` tags are accepted, without leading zeros or
+prerelease suffixes. The workflow cross-compiles ARM64/ARMv7 binaries, packages
+them with pinned nFPM, checks package metadata and contents without installation,
+and creates a **draft** GitHub Release with both `.deb` files and `SHA256SUMS`.
+Build jobs have read-only repository permissions; only the final job can create
+the draft, and it does not build or execute project code. Actions are pinned by
+commit SHA. Packages are also retained as workflow artifacts for 14 days.
+
+Wait for the workflow to finish, review the draft/metadata/assets, choose a
+project license before public distribution, and publish the draft manually.
+Users can download matching packages and verify `sha256sum --check SHA256SUMS`.
+There is no APT repository, GitHub Packages registry, automatic service install,
+or deployment step. Protect `v*` tags with repository rulesets and allow only
+trusted maintainers to create them; do not move release tags.
+
+Rerunning a workflow does not overwrite an existing draft or published release.
+If an asset upload fails after creating a draft, inspect/remove only that
+incomplete draft in GitHub before rerunning. Never replace a published release's
+assets; use a new version tag for subsequent releases.
+
 ## Running under systemd
 
 [`init/lantern.service`](init/lantern.service) is the canonical Linux system unit.
 It runs as an unprivileged dynamic user, grants only `CAP_NET_BIND_SERVICE` for
-port 53, uses a read-only filesystem sandbox, logs to journald, and restarts on
+port 53, uses a read-only filesystem sandbox with a writable systemd-managed
+`StateDirectory=lantern`, logs to journald, and restarts on
 failure. `SIGTERM` is already handled by Lantern's coordinated shutdown. Keep
 `TimeoutStopSec` longer than your configured `shutdown_timeout`.
 
@@ -182,9 +267,13 @@ administration without exposing it, an SSH tunnel is an option:
 ssh -L 8080:127.0.0.1:8080 pi@192.168.1.2
 ```
 
-**Record persistence is not implemented yet.** Automatic service restarts restore
-the startup records, not your last UI edits. This unit/configuration support does
-not make those edits durable. No systemd service is installed by the application.
+The unit sets `WorkingDirectory=/var/lib/lantern`, so the default relative
+`records_file: records.json` lives at `/var/lib/lantern/records.json`. Systemd
+creates a private state directory and makes it writable despite
+`ProtectSystem=strict`; it survives service restarts. An absolute file path can
+also be configured, but it must be writable inside the service sandbox. Back up
+the record file and startup configuration before upgrades. Package upgrades do
+not replace the runtime record file. No systemd service is installed by the application.
 
 ## Record manager
 
@@ -200,9 +289,10 @@ is validated before each change. Concurrent edits use revisions, so stale tabs
 receive a conflict instead of overwriting newer data. Changes immediately reach
 the running DNS service, but client-side DNS caches still follow TTLs.
 
-**Edits are in memory and reset on restart.** There is no persistence or import
-pipeline yet. The UI displays this limitation. SOA serials are editable and are
-not automatically incremented on other record changes.
+Edits are saved to the configured record file before they become live and survive
+restarts. The UI displays whether its zone is file-backed or in-memory (for library
+embedders). SOA serials are editable and are not automatically incremented on
+other record changes. Browser revisions are separate from DNS SOA serials.
 
 ```sh
 go run ./cmd/lantern --dns-listen 127.0.0.1:1053 --web-listen 127.0.0.1:8080
@@ -231,7 +321,7 @@ through text forms; use the Go API for those records.
 - `configs/`: canonical sample/default startup configuration.
 - `init/`: systemd unit configuration.
 - `build/package/`: nFPM package definition.
-- `pkg/dns/zone`: synchronized single-zone record storage, validation, and query handling.
+- `pkg/dns/zone`: synchronized single-zone records, JSON persistence, validation, and queries.
 - `pkg/dns/server`: UDP/TCP transport and request processing, using
   `dnsmessage.Message.Unpack` directly (package name `dnsserver`).
 - `pkg/webui`: server-rendered record manager with built-in templates and CSS.
@@ -289,8 +379,9 @@ replace them with a smaller set that still contains the required SOA and NS.
 Concurrent replacements are safe, with the last assignment winning. Applications
 composing edits must serialize them or implement revision checks to avoid lost
 updates. Do not copy a `Zone` after first use. Its zero value refuses queries;
-use `NewZone` before adding or replacing records. There is no file watcher or
-persistence layer yet. DNS caches can retain previous positive and
+use `NewZone` before adding or replacing records. `EnablePersistence(path)` loads
+or seeds file-backed storage; the application calls it automatically before
+serving. There is no file watcher. DNS caches can retain previous positive and
 negative answers until their TTLs expire.
 
 All server settings are in `dnsserver.Config`, including the handler function:

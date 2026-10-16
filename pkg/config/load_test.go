@@ -86,6 +86,7 @@ func TestLoadTypedEnvironmentAndFile(t *testing.T) {
 	cleanEnv(t)
 	path := configFile(t, "dns:\n  write_timeout: 4s\nweb:\n  allowed_hosts: [file.example]\n  max_header_bytes: 4096\nshutdown_timeout: 8s\n")
 	t.Setenv("LANTERN_DNS_READ_TIMEOUT", "2s")
+	t.Setenv("LANTERN_RECORDS_FILE", "/var/lib/lantern/test-records.json")
 	t.Setenv("LANTERN_DNS_HANDLER_TIMEOUT", "3s")
 	t.Setenv("LANTERN_DNS_CONCURRENCY", "17")
 	t.Setenv("LANTERN_WEB_ALLOWED_HOSTS", "pi.home.arpa, lantern.example.ts.net")
@@ -96,6 +97,9 @@ func TestLoadTypedEnvironmentAndFile(t *testing.T) {
 	}
 	if cfg.DNS.ReadTimeout != 2*time.Second || cfg.DNS.WriteTimeout != 4*time.Second || cfg.DNS.HandlerTimeout != 3*time.Second || cfg.DNS.Concurrency != 17 || cfg.Web.MaxHeaderBytes != 4096 || cfg.Web.IdleTimeout != 2*time.Minute || cfg.ShutdownTimeout != 8*time.Second {
 		t.Fatalf("typed settings were not loaded: %+v", cfg)
+	}
+	if cfg.RecordsFile != "/var/lib/lantern/test-records.json" {
+		t.Fatal("record file environment override was not loaded")
 	}
 	if !reflect.DeepEqual(cfg.Web.AllowedHosts, []string{"pi.home.arpa", "lantern.example.ts.net"}) {
 		t.Fatalf("hosts: %v", cfg.Web.AllowedHosts)
@@ -110,6 +114,7 @@ func TestLoadTypedEnvironmentAndFile(t *testing.T) {
 func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 	for _, tc := range []struct{ name, content string }{
 		{"malformed YAML", "dns: ["},
+		{"empty record path", "records_file: ''\n"},
 		{"unknown key", "dns:\n  concurency: 12\n"},
 		{"invalid address", "dns:\n  address: not-an-address\n"},
 		{"address whitespace", "web:\n  address: 'bad host:8080'\n"},

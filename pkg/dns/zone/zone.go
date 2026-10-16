@@ -14,12 +14,13 @@ import (
 // read-only. A Zone must not be copied after first use. Construct it with NewZone;
 // its zero value refuses queries and cannot accept records.
 type Zone struct {
-	mu       sync.RWMutex
-	origin   string
-	soa      dnsmessage.Resource
-	records  map[RecordKey][]dnsmessage.Resource
-	names    map[string]bool
-	revision uint64
+	mu        sync.RWMutex
+	origin    string
+	soa       dnsmessage.Resource
+	records   map[RecordKey][]dnsmessage.Resource
+	names     map[string]bool
+	revision  uint64
+	stateFile string
 }
 
 // NewZone validates and indexes records without cloning their bodies or slices.
@@ -69,9 +70,7 @@ func (z *Zone) Add(record dnsmessage.Resource) error {
 	if err != nil {
 		return err
 	}
-	z.records, z.names, z.soa = replacement.records, replacement.names, replacement.soa
-	z.revision++
-	return nil
+	return z.commit(replacement)
 }
 
 // ReplaceRecords atomically replaces all records while keeping the origin fixed.
@@ -87,10 +86,8 @@ func (z *Zone) ReplaceRecords(records []dnsmessage.Resource) error {
 		return err
 	}
 	z.mu.Lock()
-	z.records, z.names, z.soa = replacement.records, replacement.names, replacement.soa
-	z.revision++
-	z.mu.Unlock()
-	return nil
+	defer z.mu.Unlock()
+	return z.commit(replacement)
 }
 
 // add is used only during private construction, before the zone is published.

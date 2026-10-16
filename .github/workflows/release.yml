@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+# Never cancel an in-flight asset upload for the same version.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  metadata:
+    name: Validate release metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Validate stable tag and maintainer
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+          MAINTAINER: ${{ vars.PACKAGE_MAINTAINER }}
+        run: |
+          tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if [[ ! "$TAG" =~ $tag_pattern ]]; then
+            printf '::error::Expected a stable version tag such as v0.1.0 (no prerelease suffix).\n'
+            exit 1
+          fi
+          maintainer_pattern='^[^<>]+ <[^<>[:space:]]+@[^<>[:space:]]+>$'
+          if [[ ! "$MAINTAINER" =~ $maintainer_pattern || "$MAINTAINER" =~ [[:cntrl:]] ]]; then
+            printf '::error::Set repository variable PACKAGE_MAINTAINER to Name <email>. This becomes public package metadata.\n'
+            exit 1
+          fi
+          printf 'version=%s\n' "${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  check:
+    name: Validate tagged source
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    name: Build Debian package (${{ matrix.arch }})
+    needs: [metadata, check]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            goarch: arm64
+            goarm: ''
+            debarch: arm64
+          - arch: arm7
+            goarch: arm
+            goarm: '7'
+            debarch: armhf
+    env:
+      VERSION: ${{ needs.metadata.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+      DEB_ARCH: ${{ matrix.debarch }}
+      MAINTAINER: ${{ vars.PACKAGE_MAINTAINER }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cross-compile static Linux binary
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          mkdir -p "dist/$ARCH"
+          go build -trimpath -o "dist/$ARCH/lantern" ./cmd/lantern
+      - name: Build package with pinned nFPM
+        run: |
+          go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0 package \
+            --config build/package/nfpm.yaml --packager deb --target dist/
+      - name: Inspect package without installing or executing it
+        run: |
+          shopt -s nullglob
+          packages=(dist/*.deb)
+          if (( ${#packages[@]} != 1 )); then
+            printf '::error::Expected exactly one Debian package.\n'
+            exit 1
+          fi
+          package_version="$(dpkg-deb --field "${packages[0]}" Version)"
+          if [[ "${package_version%-*}" != "$VERSION" || "$(dpkg-deb --field "${packages[0]}" Architecture)" != "$DEB_ARCH" ]]; then
+            printf '::error::Package metadata does not match the release tag/architecture.\n'
+            exit 1
+          fi
+          export LANTERN_DEB_FILE="$PWD/${packages[0]}"
+          go test -race -count=1 -tags=integration ./tests/integration -run '^TestDebianPackage$' -v
+      - name: Upload verified package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lantern-deb-${{ matrix.arch }}
+          path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    name: Create draft GitHub Release
+    needs: [metadata, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # No checkout/build in the only job with repository write permission.
+      - name: Download verified packages from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: lantern-deb-*
+          merge-multiple: true
+          path: dist
+          digest-mismatch: error
+      - name: Verify asset set and create checksums
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          assets=(./*.deb)
+          arm64=(./*_arm64.deb)
+          armhf=(./*_armhf.deb)
+          if (( ${#assets[@]} != 2 || ${#arm64[@]} != 1 || ${#armhf[@]} != 1 )); then
+            printf '::error::Expected one arm64 package and one armhf package.\n'
+            exit 1
+          fi
+          sha256sum ./*.deb > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Attach assets to a new draft (never publish or overwrite)
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          remote_commit="$(gh api "repos/$GH_REPO/commits/$TAG" --jq '.sha')"
+          if [[ "$remote_commit" != "$EXPECTED_COMMIT" ]]; then
+            printf '::error::The tag moved after this build started; refusing to release.\n'
+            exit 1
+          fi
+          gh release create "$TAG" --verify-tag --draft --title "Lantern $TAG" \
+            --generate-notes \
+            --notes 'Install the .deb matching your Pi OS: arm64 for 64-bit, armhf for 32-bit. Verify SHA256SUMS before installation. Service activation is manual. Record state is stored separately under /var/lib/lantern with the packaged unit; back it up before upgrading. Review the assets and notes before publishing this draft.' \
+            ./*.deb SHA256SUMS

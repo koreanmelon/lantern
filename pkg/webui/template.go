@@ -71,7 +71,7 @@ const pageTemplate = `<!doctype html>
           <div class="help-icon">✦</div><h2>Small change.<br>Instant connection.</h2><p>Every save validates the full zone before it becomes live. Invalid records never replace your working configuration.</p>
           <div class="help-rule"><strong>Keep the essentials</strong><p>Your zone needs exactly one SOA and at least one NS record at its apex.</p></div>
           <div class="help-rule"><strong>One name, one alias</strong><p>A CNAME cannot share its name with other record types.</p></div>
-          <div class="help-rule"><strong>Changes are in memory</strong><p>Restarting Lantern restores the startup records. Existing client caches may retain old answers until their TTL expires.</p></div>
+          <div class="help-rule">{{if .Persistent}}<strong>Saved on disk</strong><p>Valid edits are saved before they become live and survive restarts. Client caches still follow each record’s TTL.</p>{{else}}<strong>Changes are in memory</strong><p>This zone has no record file configured. Restarting restores its startup records. Client caches follow TTLs.</p>{{end}}</div>
         </aside>
       </div>
       {{else}}
@@ -100,7 +100,7 @@ const pageTemplate = `<!doctype html>
         </table></div>
         <div class="table-footer"><span>{{len .Records}} of {{.Total}} records</span><span><i class="status-dot"></i> Changes apply to the live zone</span></div>
       </section>
-      <div class="memory-note"><span>ⓘ</span><p><strong>A workspace, not a config file.</strong> Edits are in memory and reset when Lantern restarts. Client caches follow each record’s TTL.</p><a href="/">Refresh ↻</a></div>
+      <div class="memory-note"><span>ⓘ</span><p>{{if .Persistent}}<strong>Saved before it goes live.</strong> Edits persist across restarts. Failed saves leave the working zone unchanged. Client caches follow TTLs.{{else}}<strong>In-memory workspace.</strong> This zone has no persistence configured; edits reset on restart. Client caches follow TTLs.{{end}}</p><a href="/">Refresh ↻</a></div>
       {{end}}
 
       <details id="reference" class="reference" {{if .Form}}open{{end}}>

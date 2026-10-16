@@ -21,6 +21,9 @@ func serveApplication(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	if err := handler.EnablePersistence(cfg.RecordsFile); err != nil {
+		return fmt.Errorf("record storage: %w", err)
+	}
 	var lc net.ListenConfig
 	listener, err := lc.Listen(ctx, "tcp", cfg.Web.Address)
 	if err != nil {

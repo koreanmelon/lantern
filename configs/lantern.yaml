@@ -1,7 +1,11 @@
-# Default/sample startup settings. DNS records still start from cmd/lantern/zone.go;
-# record-manager edits are in memory and do not survive process restarts.
+# Default/sample startup settings. The example zone seeds a missing record file
+# once; existing record data is loaded and UI edits are saved atomically.
 # Precedence: changed flags > LANTERN_* environment > this file > defaults.
 # Durations require units and must be positive. No live file reload is performed.
+
+# Relative to the process working directory, not this config file's directory.
+# The systemd unit uses /var/lib/lantern as its working directory.
+records_file: "records.json"
 
 dns:
   # For the Pi, deliberately change this to 192.168.1.2:53 when ready.

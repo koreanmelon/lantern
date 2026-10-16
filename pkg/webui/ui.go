@@ -30,6 +30,7 @@ type row struct {
 }
 
 type pageData struct {
+	Persistent                                      bool
 	Origin, Revision, Search, Filter, Error, Notice string
 	Total, TypeCount                                int
 	Serial                                          uint32
@@ -101,6 +102,7 @@ func (u *ui) data(r *http.Request) pageData {
 	records, revision := u.zone.Records()
 	d := pageData{Origin: u.zone.Origin(), Revision: strconv.FormatUint(revision, 10), Total: len(records), Types: recordTypes,
 		Search: r.URL.Query().Get("q"), Filter: r.URL.Query().Get("type")}
+	d.Persistent = u.zone.Persistent()
 	types := make(map[string]bool)
 	for id, record := range records {
 		typ, value := typeName(record.Header.Type), recordValue(record)

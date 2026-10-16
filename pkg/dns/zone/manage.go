@@ -13,6 +13,11 @@ import (
 func (z *Zone) Records() ([]dnsmessage.Resource, uint64) {
 	z.mu.RLock()
 	defer z.mu.RUnlock()
+	return z.recordList(), z.revision
+}
+
+// recordList requires a read or write lock when the zone is shared.
+func (z *Zone) recordList() []dnsmessage.Resource {
 	keys := make([]RecordKey, 0, len(z.records))
 	for key := range z.records {
 		keys = append(keys, key)
@@ -27,7 +32,7 @@ func (z *Zone) Records() ([]dnsmessage.Resource, uint64) {
 	for _, key := range keys {
 		records = append(records, z.records[key]...)
 	}
-	return records, z.revision
+	return records
 }
 
 // ReplaceRecordsIfRevision validates and installs records only if the zone has
@@ -46,7 +51,8 @@ func (z *Zone) ReplaceRecordsIfRevision(revision uint64, records []dnsmessage.Re
 	if z.revision != revision {
 		return false, nil
 	}
-	z.records, z.names, z.soa = replacement.records, replacement.names, replacement.soa
-	z.revision++
+	if err := z.commit(replacement); err != nil {
+		return false, err
+	}
 	return true, nil
 }
