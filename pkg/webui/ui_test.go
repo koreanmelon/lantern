@@ -229,6 +229,46 @@ func TestWebBoundariesAndEscaping(t *testing.T) {
 	}
 }
 
+func TestHTTPFormOriginProtection(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin string
+		code         int
+	}{
+		{"same origin", "http://lantern.test:8080", http.StatusSeeOther},
+		{"different host", "http://evil.example:8080", http.StatusForbidden},
+		{"different port", "http://lantern.test:8081", http.StatusForbidden},
+		{"opaque origin", "null", http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			z := testZone(t)
+			h, err := New(z, "lantern.test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			form := httptest.NewRecorder()
+			h.ServeHTTP(form, httptest.NewRequest(http.MethodGet, "http://lantern.test:8080/records/new", nil))
+			// Preserve Origin on same-origin form navigation without sending
+			// referrers cross-origin. Plain HTTP need not send Sec-Fetch-Site.
+			if policy := form.Header().Get("Referrer-Policy"); policy != "same-origin" {
+				t.Fatalf("form Referrer-Policy = %q, want same-origin", policy)
+			}
+			version := revision(z)
+			values := url.Values{"revision": {version}, "name": {"origin-test"}, "type": {"A"}, "ttl": {"60"}, "value": {"192.0.2.1"}}
+			request := httptest.NewRequest(http.MethodPost, "http://lantern.test:8080/records", strings.NewReader(values.Encode()))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request.Header.Set("Origin", tc.origin)
+			response := httptest.NewRecorder()
+			h.ServeHTTP(response, request)
+			if response.Code != tc.code {
+				t.Fatalf("POST status = %d, want %d: %s", response.Code, tc.code, response.Body.String())
+			}
+			if tc.code == http.StatusForbidden && revision(z) != version {
+				t.Fatal("rejected request changed the zone")
+			}
+		})
+	}
+}
+
 func TestHostValidation(t *testing.T) {
 	z := testZone(t)
 	h, err := New(z)
