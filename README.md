@@ -219,6 +219,20 @@ Build jobs have read-only repository permissions; only the final job can create
 the draft, and it does not build or execute project code. Actions are pinned by
 commit SHA. Packages are also retained as workflow artifacts for 14 days.
 
+To build an existing tag manually (for example, if its push did not trigger a
+run), first ensure the manual-trigger workflow is on `main`. Open **Actions →
+Release → Run workflow**, choose **main** as the workflow branch, and enter the
+existing tag, such as `v0.1.0`. Or use GitHub CLI:
+
+```sh
+gh workflow run release.yml --ref main -f tag=v0.1.0
+```
+
+The manual path validates the tag, resolves its commit, and tests and packages
+that exact source—not current `main`. Both trigger paths share a per-tag release
+concurrency group and refuse to release if the tag moves before draft creation.
+Neither path moves tags, publishes automatically, or overwrites existing releases.
+
 Wait for the workflow to finish, review the draft/metadata/assets, complete the
 [Pi/systemd verification](docs/pi-verification.md), and publish the draft manually.
 Users can download matching packages and verify `sha256sum --check SHA256SUMS`.

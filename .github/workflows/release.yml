@@ -3,13 +3,20 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag to build
+        required: true
+        default: v0.1.0
+        type: string
 
 permissions:
   contents: read
 
 # Never cancel an in-flight asset upload for the same version.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 defaults:
@@ -23,12 +30,18 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.version.outputs.commit }}
     steps:
-      - name: Validate stable tag and maintainer
+      - name: Validate and resolve existing stable tag
         id: version
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           MAINTAINER: ${{ vars.PACKAGE_MAINTAINER }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_COMMIT: ${{ github.sha }}
         run: |
           tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           if [[ ! "$TAG" =~ $tag_pattern ]]; then
@@ -40,11 +53,26 @@ jobs:
             printf '::error::Set repository variable PACKAGE_MAINTAINER to Name <email>. This becomes public package metadata.\n'
             exit 1
           fi
-          printf 'version=%s\n' "${TAG#v}" >> "$GITHUB_OUTPUT"
+          # Require a tag ref, not a branch with the same name. The commits API
+          # peels annotated tags and returns the source commit for either kind.
+          gh api "repos/$GH_REPO/git/ref/tags/$TAG" --silent
+          commit="$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq '.sha')"
+          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '::error::Could not resolve the release tag to a commit.\n'
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == push && "$commit" != "$EVENT_COMMIT" ]]; then
+            printf '::error::The tag moved after this workflow was triggered.\n'
+            exit 1
+          fi
+          printf 'version=%s\ntag=%s\ncommit=%s\n' "${TAG#v}" "$TAG" "$commit" >> "$GITHUB_OUTPUT"
 
   check:
     name: Validate tagged source
+    needs: metadata
     uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.metadata.outputs.commit }}
 
   package:
     name: Build Debian package (${{ matrix.arch }})
@@ -72,6 +100,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.metadata.outputs.commit }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -146,10 +175,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-          EXPECTED_COMMIT: ${{ github.sha }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          EXPECTED_COMMIT: ${{ needs.metadata.outputs.commit }}
         run: |
-          remote_commit="$(gh api "repos/$GH_REPO/commits/$TAG" --jq '.sha')"
+          remote_commit="$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq '.sha')"
           if [[ "$remote_commit" != "$EXPECTED_COMMIT" ]]; then
             printf '::error::The tag moved after this build started; refusing to release.\n'
             exit 1
