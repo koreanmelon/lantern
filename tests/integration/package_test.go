@@ -89,6 +89,8 @@ func TestDebianPackage(t *testing.T) {
 		{"etc/lantern/lantern.yaml", "configs/lantern.yaml", 0644},
 		{"usr/lib/systemd/system/lantern.service", "init/lantern.service", 0644},
 		{"usr/share/doc/lantern/README.md", "README.md", 0644},
+		{"usr/share/doc/lantern/copyright", "LICENSE", 0644},
+		{"usr/share/doc/lantern/docs/pi-verification.md", "docs/pi-verification.md", 0644},
 	} {
 		entry, exists := payload[file.installed]
 		if !exists {

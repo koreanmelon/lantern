@@ -164,12 +164,14 @@ repackaging the same upstream version. Files are root-owned with explicit modes:
 | `configs/lantern.yaml` | `/etc/lantern/lantern.yaml` (0644, Debian conffile) |
 | `init/lantern.service` | `/usr/lib/systemd/system/lantern.service` (0644) |
 | `README.md` | `/usr/share/doc/lantern/README.md` (0644) |
+| `LICENSE` | `/usr/share/doc/lantern/copyright` (0644) |
+| `docs/pi-verification.md` | `/usr/share/doc/lantern/docs/pi-verification.md` (0644) |
 
 The conffile designation lets dpkg preserve administrator edits during upgrades
 (or prompt about changes). No Go runtime is required on the target. This package
 targets systemd-based Debian installations and declares `systemd (>= 235)`.
-There are no maintainer scripts or implicit service actions. No project license
-is currently declared; choose the appropriate license before public distribution.
+There are no maintainer scripts or implicit service actions. Lantern uses the
+[MIT license](LICENSE), included as `/usr/share/doc/lantern/copyright`.
 
 On a Debian machine, inspect the result with `dpkg-deb --info` and
 `dpkg-deb --contents` before installing. There is also an opt-in, cross-platform
@@ -194,6 +196,10 @@ release workflow reuses these checks for tagged source.
 Before releasing, set repository **Actions variable** `PACKAGE_MAINTAINER` to
 your actual `Name <email>` in Settings → Secrets and variables → Actions →
 Variables. It becomes public Debian package metadata; it is not a credential.
+`PACKAGE_MAINTAINER` is our chosen repository-variable name, not a predefined
+GitHub/Debian environment name. The workflow maps it to `MAINTAINER`, which our
+nFPM manifest expands into Debian's standard `Maintainer` field. Both variable
+names are wiring conventions; the package field is what Debian uses.
 No PAT is needed: only the draft-creation job receives `contents: write` through
 the built-in token. Organization policy must permit that job permission.
 
@@ -213,8 +219,8 @@ Build jobs have read-only repository permissions; only the final job can create
 the draft, and it does not build or execute project code. Actions are pinned by
 commit SHA. Packages are also retained as workflow artifacts for 14 days.
 
-Wait for the workflow to finish, review the draft/metadata/assets, choose a
-project license before public distribution, and publish the draft manually.
+Wait for the workflow to finish, review the draft/metadata/assets, complete the
+[Pi/systemd verification](docs/pi-verification.md), and publish the draft manually.
 Users can download matching packages and verify `sha256sum --check SHA256SUMS`.
 There is no APT repository, GitHub Packages registry, automatic service install,
 or deployment step. Protect `v*` tags with repository rulesets and allow only
@@ -226,6 +232,11 @@ incomplete draft in GitHub before rerunning. Never replace a published release's
 assets; use a new version tag for subsequent releases.
 
 ## Running under systemd
+
+Before production activation, follow the isolated test-unit procedure in
+[`docs/pi-verification.md`](docs/pi-verification.md). It covers permissions,
+privileged ports, UI/DNS updates, restarts, failed saves, and cleanup without
+using production records. These steps are not executed automatically.
 
 [`init/lantern.service`](init/lantern.service) is the canonical Linux system unit.
 It runs as an unprivileged dynamic user, grants only `CAP_NET_BIND_SERVICE` for
@@ -453,6 +464,23 @@ go test -race ./...
 go test -race -tags=integration ./tests/integration/...
 go vet ./...
 ```
+
+The integration suite includes `TestCompiledAppPersistence`: it builds a native
+binary, starts it on ephemeral loopback ports with a temporary record file,
+rejects an invalid TXT form, saves A/TXT records through HTTP, queries them over
+UDP/TCP, stops/restarts the process with SIGTERM, and verifies persistence and
+stale-form rejection. It does not use your existing record file or systemd unit.
+CI runs it automatically with the rest of the integration suite. To run just this
+smoke test (Go and Bash only; no curl/jq/dig dependencies):
+
+```sh
+bash scripts/smoke-test.sh
+# Or directly, including race detection in the test driver:
+go test -race -tags=integration ./tests/integration -run '^TestCompiledAppPersistence$' -count=1 -v
+```
+
+This is not a substitute for the Pi/systemd checks above: the smoke binary runs
+natively on the test host and does not validate ARM execution or sandbox behavior.
 
 Integration tests are in a separate package and use only
 public APIs. They bind ephemeral loopback ports; no external DNS is needed.

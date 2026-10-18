@@ -17,6 +17,7 @@ func TestRecordFormats(t *testing.T) {
 		{"TXT", "text", "hello world"}, {"TXT", "empty", ""},
 		{"TXT", "chunks", `["hello", "world", "line\nbreak", "[bracket]"]`},
 		{"TXT", "newline", "hello\nworld"},
+		{"TXT", "empty-chunks", `["", "hello", ""]`},
 		{"SOA", "@", "ns.home.arpa. hostmaster.home.arpa. 1 3600 600 86400 60"},
 	} {
 		t.Run(tc.typ+"/"+tc.name, func(t *testing.T) {
@@ -42,6 +43,21 @@ func TestRecordFormats(t *testing.T) {
 			}
 			if !bytes.Equal(a, b) {
 				t.Fatalf("record format did not roundtrip: %q", form.Value)
+			}
+		})
+	}
+}
+
+func TestTXTRejectsNonStringItems(t *testing.T) {
+	for _, tc := range []struct{ name, value string }{
+		{"null", `[null]`}, {"null between strings", `["hello", null, "world"]`},
+		{"number", `["hello", 1]`}, {"boolean", `[true]`},
+		{"object", `[{}]`}, {"nested array", `[["hello"]]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseRecord(recordForm{Name: "txt", Type: "TXT", TTL: "60", Value: tc.value}, "home.arpa.")
+			if err == nil {
+				t.Fatal("non-string TXT array item was accepted")
 			}
 		})
 	}

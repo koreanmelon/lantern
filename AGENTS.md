@@ -123,6 +123,9 @@ out of `internal/`. Do not recreate a separate `ZoneHandler` or `hosted` package
 - nFPM v2.48.0: export VERSION, ARCH, MAINTAINER; build static Linux binaries in
   `dist/arm64/` or `dist/arm7/` first. `arm7` maps to Debian `armhf`.
 - No package hooks automatically enable/start/restart/remove service state.
+- The project uses the canonical root `LICENSE` (MIT); the Debian package installs
+  it as `/usr/share/doc/lantern/copyright`. Keep packaged documentation/license
+  contents synchronized with source files.
 - Releases go through GitHub Releases, **not** an APT repo or GitHub Packages.
   Stable `vMAJOR.MINOR.PATCH` tag pushes build verified packages and SHA256SUMS,
   then create a **draft** for manual review/publication.
@@ -145,6 +148,13 @@ go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.y
 
 Keep pure unit tests alongside code and real-socket tests in `tests/integration`.
 Use temporary state paths, ephemeral loopback ports, and bounded deadlines.
+`TestCompiledAppPersistence` builds a native binary and automates HTTP edits,
+UDP/TCP queries, SIGTERM/restart, JSON reload, and stale-form rejection. CI runs it
+with the integration suite. A local shortcut is `bash scripts/smoke-test.sh`.
+It must never use a real record file; its child environment filters `LANTERN_*`
+and explicitly selects temporary state. Do not replace this with production
+service restarts. Manual Pi/systemd checks live in `docs/pi-verification.md` and
+use an isolated verification unit/state directory.
 Rebuild packages after canonical payload changes (including README/unit/config),
 then inspect without installing:
 
@@ -156,26 +166,29 @@ LANTERN_DEB_FILE="$PWD/dist/lantern_0.1.0-1_arm64.deb" \
 Repeat for armhf. Do not claim Linux/systemd or GitHub Actions execution was
 verified merely because cross-compilation, archive inspection, or actionlint passed.
 
-## Current handoff (2026-10-15; update/remove when completed)
+## Current verification handoff (2026-10-17; update/remove when completed)
 
-The draft-release workflows and record persistence are **work in progress** built
-on commit `30aa920`. Preserve this work and concurrent user edits.
+Persistence and draft-release workflows were committed in `57d8520`. The current
+follow-ups fix TXT parsing, automate restart smoke tests, and add MIT licensing
+and Pi instructions. Preserve concurrent user edits.
 
-- Workflow actionlint passed; release permissions received a read-only review
-  with no actionable findings. No tag, remote release, or workflow run was created.
-- Initial persistence review found JSON-null coercion. The file loader now rejects
-  null/duplicate keys, requires structured fields, and has no-overwrite regression
-  tests. Latest focused race tests for zone/webui passed, including size limits.
-- **Remaining issue:** the web TXT form parser still unmarshals JSON arrays into
-  `[]string`, which accepts null items as empty strings. A proposed fix did not
-  apply. Reject null/non-string items and add a form-parser regression test.
-- Full race/integration/vet/diff checks and actionlint passed after the strict
-  file-decoder fixes. Rerun after the remaining UI parser fix; consider a focused
-  follow-up review of the file decoder.
-- Run a compiled-app HTTP edit → DNS query → stop/restart persistence smoke test
-  using a temporary `LANTERN_RECORDS_FILE`. Earlier compiled-app smoke checks
-  preceded persistence and do not prove restart behavior.
-- Rebuild ARM64/ARMHF packages: existing ignored `dist/` artifacts predate the
-  persistence/systemd/README changes. Verify the fresh archives before claiming
-  they contain the new state-directory setup. Systemd itself is untested on this
-  macOS host; remote Actions execution is also unverified.
+- The TXT form parser now rejects null/non-string JSON array entries and preserves
+  explicit empty chunks. Parser and HTTP regression tests pass.
+- The strict record-file decoder rejects null/duplicate keys and missing fields.
+  A follow-up read-only review found no outstanding actionable issue.
+- The compiled-app persistence smoke test passed both through the Bash wrapper
+  and as part of the race-enabled integration suite. It uses temporary state.
+- Full race-enabled unit/integration tests, vet, actionlint, and diff checks passed.
+- Fresh ARM64/ARMHF binaries and `.deb` files were built and inspected, including
+  current config/unit/README, MIT copyright, and the Pi verification guide.
+  Local packages use **verification-only maintainer metadata**; rebuild with real
+  metadata for distribution. Generated artifacts remain ignored under `dist/`.
+- The user reports setting repository variable `PACKAGE_MAINTAINER`. It is our
+  convention, mapped to the manifest's `MAINTAINER` environment variable, not a
+  predefined GitHub environment name.
+- **Still manual:** execute `docs/pi-verification.md` on the Pi. Actual ARM/Linux
+  execution, systemd capabilities/sandbox behavior, and remote Actions execution
+  are not established by local tests. The user explicitly authorized committing,
+  pushing, tagging `v0.1.0`, and publishing the release after successful Actions,
+  without waiting for Pi verification. The workflow itself remains draft-only;
+  publication is a separate, explicitly authorized action.

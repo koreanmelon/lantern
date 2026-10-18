@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -147,8 +148,18 @@ func parseRecord(form recordForm, origin string) (dnsmessage.Resource, error) {
 	case "TXT":
 		chunks := []string{form.Value}
 		if strings.HasPrefix(value, "[") {
-			if err := json.Unmarshal([]byte(value), &chunks); err != nil || len(chunks) == 0 {
+			var raw []json.RawMessage
+			if err := json.Unmarshal([]byte(value), &raw); err != nil || len(raw) == 0 {
 				return r, fmt.Errorf("TXT must be plain text or a non-empty JSON array of strings")
+			}
+			chunks = make([]string, len(raw))
+			for i, item := range raw {
+				if bytes.Equal(bytes.TrimSpace(item), []byte("null")) {
+					return r, fmt.Errorf("TXT array items must be strings, not null")
+				}
+				if err := json.Unmarshal(item, &chunks[i]); err != nil {
+					return r, fmt.Errorf("TXT array items must be strings")
+				}
 			}
 		}
 		for _, chunk := range chunks {

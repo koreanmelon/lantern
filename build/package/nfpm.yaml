@@ -14,6 +14,7 @@ description: |
   Record edits are persisted in a separate, versioned JSON state file.
 section: net
 priority: optional
+license: MIT
 depends:
   - systemd (>= 235)
 
@@ -42,6 +43,18 @@ contents:
       group: root
   - src: README.md
     dst: /usr/share/doc/lantern/README.md
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: LICENSE
+    dst: /usr/share/doc/lantern/copyright
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: docs/pi-verification.md
+    dst: /usr/share/doc/lantern/docs/pi-verification.md
     file_info:
       mode: 0644
       owner: root

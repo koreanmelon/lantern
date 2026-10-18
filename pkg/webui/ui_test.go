@@ -122,6 +122,7 @@ func TestInvalidEditsAndStaleTabs(t *testing.T) {
 		{"app", "CNAME", "target.home.arpa."},
 		{"bad", "A", "not an IP"},
 		{"bad", "UNKNOWN", "value"},
+		{"bad", "TXT", `["hello", null]`},
 	} {
 		t.Run(tc.name+tc.typ, func(t *testing.T) {
 			response := send(h, http.MethodPost, "/records", url.Values{"revision": {initial}, "name": {tc.name}, "type": {tc.typ}, "ttl": {"60"}, "value": {tc.value}})
