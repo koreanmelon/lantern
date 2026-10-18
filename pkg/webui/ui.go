@@ -77,13 +77,17 @@ func New(z *zone.Zone, additionalHosts ...string) (http.Handler, error) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		fmt.Fprint(w, stylesheet)
 	})
+	mux.HandleFunc("GET /assets/notifications.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		fmt.Fprint(w, notificationScript)
+	})
 	protected := http.NewCrossOriginProtection().Handler(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		// no-referrer can turn same-origin form POSTs into Origin: null.
 		w.Header().Set("Referrer-Policy", "same-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 		if !hosts[normalizeHost(r.Host)] {
 			http.Error(w, "Unrecognized dashboard host. Use the configured listen address.", http.StatusMisdirectedRequest)
 			return

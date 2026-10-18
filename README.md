@@ -306,8 +306,11 @@ Open **http://127.0.0.1:8080** for the dashboard. The application serves DNS and
 the dashboard together; Ctrl-C shuts down both.
 
 The dashboard is implemented entirely in Go with `net/http`, `html/template`, and
-Go string assets. There is no JavaScript, frontend build step, CDN, or additional
-dependency. It includes a responsive record table, search/type filters, add/edit
+Go string assets. A small, locally served vanilla-JavaScript enhancement makes
+success notifications dismissible overlay toasts, without a frontend build step,
+CDN, or additional dependency. With JavaScript disabled, notices remain readable
+inline; validation errors always stay inline and preserve form input. Toasts do
+not auto-dismiss. It includes a responsive record table, search/type filters, add/edit
 forms, deletion, a record-format reference, and inline validation errors. All
 nine supported types can be managed, including the apex SOA and NS. The full zone
 is validated before each change. Concurrent edits use revisions, so stale tabs

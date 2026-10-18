@@ -183,7 +183,7 @@ jobs:
             printf '::error::The tag moved after this build started; refusing to release.\n'
             exit 1
           fi
-          gh release create "$TAG" --verify-tag --draft --title "Lantern $TAG" \
+          gh release create "$TAG" --verify-tag --draft --title "lantern $TAG" \
             --generate-notes \
             --notes 'Install the .deb matching your Pi OS: arm64 for 64-bit, armhf for 32-bit. Verify SHA256SUMS before installation. Service activation is manual. Record state is stored separately under /var/lib/lantern with the packaged unit; back it up before upgrading. Review the assets and notes before publishing this draft.' \
             ./*.deb SHA256SUMS

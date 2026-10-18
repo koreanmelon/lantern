@@ -1,6 +1,6 @@
 package webui
 
-// Templates and styles live in Go so the application ships as one binary with
+// Templates, styles, and scripts live in Go so the application ships as one binary with
 // no frontend toolchain, asset files, or external network dependencies.
 const pageTemplate = `<!doctype html>
 <html lang="en">
@@ -10,6 +10,7 @@ const pageTemplate = `<!doctype html>
   <meta name="color-scheme" content="light">
   <title>{{if .Form}}{{.Form.Title}}{{else}}DNS records{{end}} · Lantern</title>
   <link rel="stylesheet" href="/assets/style.css">
+  <script src="/assets/notifications.js" defer></script>
 </head>
 <body>
 <div class="app">
@@ -41,7 +42,7 @@ const pageTemplate = `<!doctype html>
       <div class="topbar-meta"><span class="live-pill"><i class="status-dot"></i> Live editor</span><span class="revision">Revision {{.Revision}}</span></div>
     </header>
 
-    <main id="main">
+    <main id="main" tabindex="-1">
       <div class="page-heading">
         <div><div class="eyebrow">A LITTLE ORDER FOR YOUR NETWORK</div><h1>{{if .Form}}{{.Form.Title}}{{else}}DNS records<span class="heading-dot">.</span>{{end}}</h1>
           <p>{{if .Form}}Define where a name leads. Validated changes apply to your running DNS server.{{else}}Give every service a name. Manage the records that connect your homelab.{{end}}</p>
@@ -50,7 +51,7 @@ const pageTemplate = `<!doctype html>
       </div>
 
       {{if .Error}}<div class="alert error" role="alert"><span class="alert-icon">!</span><div><strong>That change wasn’t applied</strong><p>{{.Error}}</p></div></div>{{end}}
-      {{if .Notice}}<div class="alert success" role="status"><span class="alert-icon">✓</span><div><strong>All set</strong><p>{{.Notice}}</p></div></div>{{end}}
+      {{if .Notice}}<div class="alert success" data-toast><div class="notice-content" role="status"><span class="alert-icon" aria-hidden="true">✓</span><div><strong>All set</strong><p>{{.Notice}}</p></div></div><button class="toast-dismiss" type="button" aria-label="Dismiss notification" data-dismiss-toast hidden><span aria-hidden="true">×</span></button></div>{{end}}
 
       {{if .Form}}
       <div class="editor-grid">
