@@ -236,7 +236,8 @@ def build(site, repository, url, bootstrap):
     options = {"Origin": "Lantern", "Label": "Lantern", "Suite": "stable", "Codename": "stable",
                "Architectures": "arm64 armhf", "Components": "main", "Acquire-By-Hash": "yes",
                "Valid-Until": expiry.strftime("%a, %d %b %Y %H:%M:%S +0000"), "MD5": "false", "SHA1": "false"}
-    args = ["apt-ftparchive"]
+    # The default Release scan includes Packages but not our retention catalog.
+    args = ["apt-ftparchive", "-o", "APT::FTPArchive::Release::Patterns::=catalog.json"]
     for name, value in options.items():
         args += ["-o", f"APT::FTPArchive::Release::{name}={value}"]
     release = run(*args, "release", "dists/stable", cwd=site)
