@@ -1,0 +1,145 @@
+name: Publish APT repository
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: Allow the first deployment when no signed repository exists
+        type: boolean
+        default: false
+  # Release metadata expires after 30 days; refresh even without a new release.
+  schedule:
+    - cron: '23 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apt-pages
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  generate:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      source: ${{ steps.source.outputs.commit }}
+    steps:
+      # Always use trusted default-branch tooling, never release asset scripts.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Pin tooling revision for this deployment
+        id: source
+        run: printf 'commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install repository tooling from Ubuntu 24.04
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y apt-utils gnupg
+          dpkg-query -W apt apt-utils gnupg
+      - name: Test repository generation and isolated APT clients
+        run: python3 -m unittest discover -s scripts/tests -v
+      - name: Generate repository from all published stable releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BOOTSTRAP: ${{ inputs.bootstrap || false }}
+        run: |
+          args=()
+          if [[ "$BOOTSTRAP" == true ]]; then args+=(--bootstrap); fi
+          python3 scripts/apt_repository.py build --site dist/apt \
+            --repository "$REPOSITORY" \
+            --url https://koreanmelon.github.io/lantern "${args[@]}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apt-unsigned
+          path: dist/apt/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    needs: generate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.generate.outputs.source }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: apt-unsigned
+          path: dist/apt
+          digest-mismatch: error
+      - name: Sign metadata using the pinned repository key
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          APT_SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+        run: python3 scripts/apt_repository.py sign --site dist/apt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apt-signed
+          path: dist/apt/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  verify:
+    needs: [generate, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.generate.outputs.source }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: apt-signed
+          path: dist/apt
+          digest-mismatch: error
+      - name: APT update and download for both architectures (no installation)
+        run: python3 scripts/apt_repository.py smoke --site dist/apt
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: dist/apt
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        id: deployment
+
+  check-live:
+    needs: [generate, deploy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.generate.outputs.source }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: apt-signed
+          path: dist/apt
+          digest-mismatch: error
+      - name: Verify the public Pages repository using isolated APT clients
+        run: python3 scripts/apt_repository.py smoke --site dist/apt --url https://koreanmelon.github.io/lantern

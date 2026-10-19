@@ -166,6 +166,7 @@ repackaging the same upstream version. Files are root-owned with explicit modes:
 | `README.md` | `/usr/share/doc/lantern/README.md` (0644) |
 | `LICENSE` | `/usr/share/doc/lantern/copyright` (0644) |
 | `docs/pi-verification.md` | `/usr/share/doc/lantern/docs/pi-verification.md` (0644) |
+| `docs/apt-repository.md` | `/usr/share/doc/lantern/docs/apt-repository.md` (0644) |
 
 The conffile designation lets dpkg preserve administrator edits during upgrades
 (or prompt about changes). No Go runtime is required on the target. This package
@@ -188,6 +189,10 @@ The normal integration suite skips that test unless `LANTERN_DEB_FILE` is set.
 Building or inspecting packages does not install them or alter system services.
 
 ## GitHub Releases
+
+For repeatable Pi upgrades without manually downloading `.deb` files, configure
+the signed [APT repository](docs/apt-repository.md) once. Then use
+`sudo apt update` and `sudo apt install lantern`; service restarts stay explicit.
 
 `.github/workflows/ci.yml` checks formatting, module files, vet, and race-enabled
 unit/integration tests on pull requests, pushes to `main`, and manual runs. The
@@ -236,8 +241,9 @@ Neither path moves tags, publishes automatically, or overwrites existing release
 Wait for the workflow to finish, review the draft/metadata/assets, complete the
 [Pi/systemd verification](docs/pi-verification.md), and publish the draft manually.
 Users can download matching packages and verify `sha256sum --check SHA256SUMS`.
-There is no APT repository, GitHub Packages registry, automatic service install,
-or deployment step. Protect `v*` tags with repository rulesets and allow only
+Published stable releases also feed the signed [APT repository](docs/apt-repository.md)
+hosted on GitHub Pages. There is no GitHub Packages registry or automatic service
+activation. Protect `v*` tags with repository rulesets and allow only
 trusted maintainers to create them; do not move release tags.
 
 Rerunning a workflow does not overwrite an existing draft or published release.

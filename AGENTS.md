@@ -126,7 +126,15 @@ out of `internal/`. Do not recreate a separate `ZoneHandler` or `hosted` package
 - The project uses the canonical root `LICENSE` (MIT); the Debian package installs
   it as `/usr/share/doc/lantern/copyright`. Keep packaged documentation/license
   contents synchronized with source files.
-- Releases go through GitHub Releases, **not** an APT repo or GitHub Packages.
+- GitHub Releases retain the authoritative packages; published stable releases
+  also feed a signed APT repository on this repository's GitHub Pages site.
+  No GitHub Packages registry. Generated packages/indexes never enter Git.
+  `scripts/apt_repository.py` uses Python's standard library and Ubuntu APT/GPG
+  tooling (build tools, not application dependencies). Preserve checksum/metadata
+  validation, signed retention checks, historical by-hash indexes, fingerprint
+  pinning, and separate generation/signing/deployment jobs. Only the signing step
+  receives APT secrets; only the deployment job gets Pages write/OIDC permissions.
+  See `docs/apt-repository.md` for bootstrap, refresh, retention, and key rotation.
   Stable `vMAJOR.MINOR.PATCH` tag pushes build verified packages and SHA256SUMS,
   then create a **draft** for manual review/publication.
 - Repository variable `PACKAGE_MAINTAINER` must contain real public package
@@ -143,7 +151,8 @@ go test -race ./...
 go test -race -shuffle=on -count=1 -tags=integration ./tests/integration/...
 go vet -tags=integration ./...
 git diff --check
-go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml .github/workflows/release.yml
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/apt.yml
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -v
 ```
 
 Keep pure unit tests alongside code and real-socket tests in `tests/integration`.

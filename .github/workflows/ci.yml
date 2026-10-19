@@ -55,3 +55,10 @@ jobs:
         run: go test -race -shuffle=on -count=1 ./...
       - name: Integration tests (including compiled-app restart smoke)
         run: go test -race -shuffle=on -count=1 -tags=integration ./tests/integration/...
+      - name: Test APT repository tooling with isolated clients
+        # Older source tags predate the APT tooling; reusable CI still supports them.
+        if: hashFiles('scripts/apt_repository.py') != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y apt-utils gnupg
+          python3 -m unittest discover -s scripts/tests -v

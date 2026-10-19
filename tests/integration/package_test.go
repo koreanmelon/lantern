@@ -91,6 +91,7 @@ func TestDebianPackage(t *testing.T) {
 		{"usr/share/doc/lantern/README.md", "README.md", 0644},
 		{"usr/share/doc/lantern/copyright", "LICENSE", 0644},
 		{"usr/share/doc/lantern/docs/pi-verification.md", "docs/pi-verification.md", 0644},
+		{"usr/share/doc/lantern/docs/apt-repository.md", "docs/apt-repository.md", 0644},
 	} {
 		entry, exists := payload[file.installed]
 		if !exists {

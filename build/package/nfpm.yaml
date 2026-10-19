@@ -59,6 +59,12 @@ contents:
       mode: 0644
       owner: root
       group: root
+  - src: docs/apt-repository.md
+    dst: /usr/share/doc/lantern/docs/apt-repository.md
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
 
 deb:
   compression: gzip
