@@ -235,12 +235,14 @@ def build(site, repository, url, bootstrap):
     expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
     options = {"Origin": "Lantern", "Label": "Lantern", "Suite": "stable", "Codename": "stable",
                "Architectures": "arm64 armhf", "Components": "main", "Acquire-By-Hash": "yes",
-               "Valid-Until": expiry.strftime("%a, %d %b %Y %H:%M:%S +0000"), "MD5": "false", "SHA1": "false"}
+               "MD5": "false", "SHA1": "false"}
     # The default Release scan includes Packages but not our retention catalog.
     args = ["apt-ftparchive", "-o", "APT::FTPArchive::Release::Patterns::=catalog.json"]
     for name, value in options.items():
         args += ["-o", f"APT::FTPArchive::Release::{name}={value}"]
     release = run(*args, "release", "dists/stable", cwd=site)
+    # Noble's apt-ftparchive does not emit Valid-Until from a Release option.
+    release = f"Valid-Until: {expiry:%a, %d %b %Y %H:%M:%S +0000}\n".encode() + release
     write(site / "dists/stable/Release", release)
     write(site / ".nojekyll", b"")
     write(site / "index.html", b"<!doctype html><title>Lantern APT repository</title><h1>Lantern APT repository</h1><p>Signed stable packages for arm64 and armhf.</p><p><a href='https://github.com/koreanmelon/lantern/blob/main/docs/apt-repository.md'>Setup instructions</a></p>\n")
