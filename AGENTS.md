@@ -175,29 +175,26 @@ LANTERN_DEB_FILE="$PWD/dist/lantern_0.1.0-1_arm64.deb" \
 Repeat for armhf. Do not claim Linux/systemd or GitHub Actions execution was
 verified merely because cross-compilation, archive inspection, or actionlint passed.
 
-## Current verification handoff (2026-10-17; update/remove when completed)
+## Current verification handoff
 
-Persistence and draft-release workflows were committed in `57d8520`. The current
-follow-ups fix TXT parsing, automate restart smoke tests, and add MIT licensing
-and Pi instructions. Preserve concurrent user edits.
-
-- The TXT form parser now rejects null/non-string JSON array entries and preserves
-  explicit empty chunks. Parser and HTTP regression tests pass.
-- The strict record-file decoder rejects null/duplicate keys and missing fields.
-  A follow-up read-only review found no outstanding actionable issue.
-- The compiled-app persistence smoke test passed both through the Bash wrapper
-  and as part of the race-enabled integration suite. It uses temporary state.
-- Full race-enabled unit/integration tests, vet, actionlint, and diff checks passed.
-- Fresh ARM64/ARMHF binaries and `.deb` files were built and inspected, including
-  current config/unit/README, MIT copyright, and the Pi verification guide.
-  Local packages use **verification-only maintainer metadata**; rebuild with real
-  metadata for distribution. Generated artifacts remain ignored under `dist/`.
-- The user reports setting repository variable `PACKAGE_MAINTAINER`. It is our
-  convention, mapped to the manifest's `MAINTAINER` environment variable, not a
-  predefined GitHub environment name.
-- **Still manual:** execute `docs/pi-verification.md` on the Pi. Actual ARM/Linux
-  execution, systemd capabilities/sandbox behavior, and remote Actions execution
-  are not established by local tests. The user explicitly authorized committing,
-  pushing, tagging `v0.1.0`, and publishing the release after successful Actions,
-  without waiting for Pi verification. The workflow itself remains draft-only;
-  publication is a separate, explicitly authorized action.
+- Lantern releases through `v0.1.2` are published. The user reports running the
+  installed ARM64 binary under systemd on the Pi and querying it over Tailscale.
+- Signed APT hosting is live at `https://koreanmelon.github.io/lantern/`.
+  Bootstrap run `39209488997` and normal refresh `39209683374` both passed,
+  including real isolated APT updates/downloads for both architectures against
+  the public URL. Existing stable release versions are retained.
+- Linux CI `39209269798` passed the repository tests, including disposable signing
+  keys, wrong-key/passphrase failures, unsigned-message rejection, tampering,
+  and second-generation retention. Review found no remaining actionable issue.
+- Local race tests, integration tests, vet, actionlint, and both rebuilt package
+  inspections passed. Local `0.0.0` packages use verification-only metadata and
+  are ignored under `dist/`; they must not be distributed.
+- `APT_SIGNING_KEY` and `APT_SIGNING_PASSPHRASE` exist as repository secrets.
+  Never read/export them locally or place them in artifacts. The pinned public
+  fingerprint and rotation procedure are documented in `docs/apt-repository.md`.
+- **Still manual:** configure APT trust on the user's Pi using that guide and
+  verify an actual install/upgrade. Cloud APT client downloads do not establish
+  Pi package installation, systemd sandbox behavior, or storage durability.
+- No new application release was needed for APT hosting. Preserve concurrent
+  edits; future commits, pushes, releases, deployments, and Pi service actions
+  still require the user's authorization.
