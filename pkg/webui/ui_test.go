@@ -406,7 +406,7 @@ func TestWebPersistenceAndFailedSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := send(h, http.MethodGet, "/", nil)
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Saved before it goes live") {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-storage="file"`) || !strings.Contains(page.Body.String(), "Changes saved to disk.") {
 		t.Fatal("persistent status not shown")
 	}
 	values := url.Values{"revision": {revision(z)}, "name": {"saved"}, "type": {"A"}, "ttl": {"60"}, "value": {"192.0.2.8"}}

@@ -32,8 +32,7 @@ type row struct {
 type pageData struct {
 	Persistent                                      bool
 	Origin, Revision, Search, Filter, Error, Notice string
-	Total, TypeCount                                int
-	Serial                                          uint32
+	Total                                           int
 	Records                                         []row
 	Types                                           []string
 	Form                                            *recordForm
@@ -112,13 +111,8 @@ func (u *ui) data(r *http.Request) pageData {
 	d := pageData{Origin: u.zone.Origin(), Revision: strconv.FormatUint(revision, 10), Total: len(records), Types: recordTypes,
 		Search: r.URL.Query().Get("q"), Filter: r.URL.Query().Get("type")}
 	d.Persistent = u.zone.Persistent()
-	types := make(map[string]bool)
 	for id, record := range records {
 		typ, value := typeName(record.Header.Type), recordValue(record)
-		types[typ] = true
-		if body, ok := record.Body.(*dnsmessage.SOAResource); ok {
-			d.Serial = body.Serial
-		}
 		fullName := record.Header.Name.String()
 		name := fullName
 		canonical, _ := zone.FQDN(fullName)
@@ -136,7 +130,6 @@ func (u *ui) data(r *http.Request) pageData {
 		d.Records = append(d.Records, row{ID: id, Name: name, FullName: fullName, Type: typ, TTL: strconv.FormatUint(uint64(record.Header.TTL), 10), Value: value,
 			EditURL: fmt.Sprintf("/records/%d/edit?revision=%d", id, revision)})
 	}
-	d.TypeCount = len(types)
 	return d
 }
 

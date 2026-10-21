@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+case "${1:-}" in
+    remove|purge)
+        if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+            if ! systemctl --system daemon-reload >/dev/null; then
+                printf '%s\n' 'lantern: warning: systemd daemon-reload failed; run sudo systemctl daemon-reload' >&2 || true
+            fi
+        fi
+        ;;
+esac
+
+exit 0

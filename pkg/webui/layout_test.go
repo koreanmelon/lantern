@@ -23,7 +23,7 @@ func TestCompactHeaderLayout(t *testing.T) {
 				t.Fatalf("status %d: %s", response.Code, response.Body.String())
 			}
 			body := response.Body.String()
-			for _, obsolete := range []string{`class="sidebar"`, `aria-label="Main navigation"`, `href="/#reference"`, `class="breadcrumb"`} {
+			for _, obsolete := range []string{`class="sidebar"`, `aria-label="Main navigation"`, `href="/#reference"`, `class="breadcrumb"`, `class="stats"`, `class="live-pill"`, `class="revision"`, `class="editor-help"`, `class="memory-note"`, `class="page-footer"`, `class="record-symbol"`, `class="eyebrow"`, `Zone records`, `Small change.`} {
 				if strings.Contains(body, obsolete) {
 					t.Fatalf("obsolete sidebar navigation: %s", obsolete)
 				}
@@ -36,7 +36,7 @@ func TestCompactHeaderLayout(t *testing.T) {
 			if !found {
 				t.Fatal("unclosed header")
 			}
-			for _, want := range []string{`href="/" aria-label="Lantern home"`, `CURRENT ZONE`, `home.arpa.`, `Authoritative · IN class`, `id="theme-preference"`, `No authentication is enabled.`, `Keep this dashboard on a trusted interface.`} {
+			for _, want := range []string{`href="/" aria-label="Lantern home"`, `aria-label="Current zone">home.arpa.`, `id="theme-preference"`, `No authentication.`, `Use a trusted interface.`} {
 				if !strings.Contains(header, want) {
 					t.Fatalf("header missing %s", want)
 				}
@@ -47,11 +47,23 @@ func TestCompactHeaderLayout(t *testing.T) {
 			if !strings.Contains(body, `<details id="reference"`) || !strings.Contains(body, `Record format guide`) {
 				t.Fatal("record format guide was removed")
 			}
-			if path == "/" && !strings.Contains(body, `href="/records/new"><span>＋</span> Add record`) {
+			if strings.Count(body, `data-storage="memory"`) != 1 || !strings.Contains(body, "Edits will be lost on restart.") {
+				t.Fatal("missing concise in-memory warning")
+			}
+			if strings.Contains(body, `<details id="reference" class="reference" open`) {
+				t.Fatal("reference should be collapsed until requested")
+			}
+			if path == "/" && !strings.Contains(body, `href="/records/new">Add record`) {
 				t.Fatal("missing Add record action")
 			}
-			if path != "/" && !strings.Contains(body, `← All records`) {
+			if path != "/" && !strings.Contains(body, `href="/">Cancel`) {
 				t.Fatal("missing return to records link")
+			}
+			if path == "/" && !strings.Contains(body, `<strong class="record-name" title="app.home.arpa.">app</strong>`) {
+				t.Fatal("short names should retain the full name in a tooltip")
+			}
+			if !strings.Contains(body, `name="revision" value="`+revision(z)+`"`) {
+				t.Fatal("hidden revision protection was removed")
 			}
 		})
 	}

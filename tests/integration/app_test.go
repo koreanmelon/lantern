@@ -172,7 +172,7 @@ func startCompiledApp(t *testing.T, binary, state, root string) *compiledApp {
 			if err == nil {
 				body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 				response.Body.Close()
-				if readErr == nil && response.StatusCode == http.StatusOK && bytes.Contains(body, []byte("Saved before it goes live")) {
+				if readErr == nil && response.StatusCode == http.StatusOK && bytes.Contains(body, []byte(`data-storage="file"`)) {
 					answer, err := exchangeSmokeDNS(t.Context(), "udp", dnsAddress, "home.arpa.", dnsmessage.TypeSOA)
 					if err == nil && answer.Authoritative && len(answer.Answers) == 1 {
 						return app
@@ -249,7 +249,7 @@ func (a *compiledApp) revision(t *testing.T) string {
 	if err != nil || response.StatusCode != http.StatusOK {
 		t.Fatalf("read dashboard: %v, status=%d", err, response.StatusCode)
 	}
-	match := regexp.MustCompile(`Revision ([0-9]+)`).FindSubmatch(body)
+	match := regexp.MustCompile(`name="revision" value="([0-9]+)"`).FindSubmatch(body)
 	if len(match) != 2 {
 		t.Fatal("dashboard has no revision")
 	}

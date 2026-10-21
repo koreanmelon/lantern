@@ -179,14 +179,18 @@ repackaging the same upstream version. Files are root-owned with explicit modes:
 The conffile designation lets dpkg preserve administrator edits during upgrades
 (or prompt about changes). No Go runtime is required on the target. This package
 targets systemd-based Debian installations and declares `systemd (>= 235)`.
-There are no maintainer scripts or implicit service actions. Lantern uses the
+From v0.1.6, maintainer scripts run `systemctl --system daemon-reload` after
+configuration (including upgrades) and removal/purge when systemd is running.
+Reload failures produce a warning without failing the package operation. The
+hooks never enable, start, stop, or restart Lantern or remove record state;
+restart an existing service explicitly after upgrading. Lantern uses the
 [MIT license](LICENSE), included as `/usr/share/doc/lantern/copyright`.
 
 On a Debian machine, inspect the result with `dpkg-deb --info` and
 `dpkg-deb --contents` before installing. There is also an opt-in, cross-platform
 archive test (no installation or target execution) that checks the package's
 config/unit against their canonical sources, conffile registration, file modes,
-root ownership, lack of lifecycle scripts, and static ELF architecture:
+root ownership, canonical reload-only scripts, and static ELF architecture:
 
 ```sh
 LANTERN_DEB_FILE="$PWD/dist/lantern_0.1.0-1_arm64.deb" \

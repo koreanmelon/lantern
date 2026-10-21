@@ -67,6 +67,10 @@ sudo apt install lantern
 
 Installation/upgrades do **not** enable, start, or restart the service. Back up
 `/etc/lantern/lantern.yaml` and `/var/lib/lantern/records.json` before an upgrade.
+From v0.1.6, package hooks reload systemd unit definitions automatically when
+systemd is running (also after removal/purge); failures warn rather than fail
+the package operation. The explicit reload below is harmless and also covers
+older packages or a failed automatic reload.
 For an already running service, explicitly apply the new binary:
 
 ```sh

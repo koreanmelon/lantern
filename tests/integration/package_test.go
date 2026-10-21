@@ -76,9 +76,22 @@ func TestDebianPackage(t *testing.T) {
 	if !strings.Contains(string(control["conffiles"].data), "/etc/lantern/lantern.yaml") {
 		t.Fatal("startup config is not marked as a conffile")
 	}
-	for _, name := range []string{"preinst", "postinst", "prerm", "postrm"} {
+	for _, name := range []string{"preinst", "prerm"} {
 		if _, exists := control[name]; exists {
 			t.Fatalf("unexpected lifecycle script %s", name)
+		}
+	}
+	for _, name := range []string{"postinst", "postrm"} {
+		entry, exists := control[name]
+		if !exists || entry.mode != 0755 || entry.uid != 0 || entry.gid != 0 {
+			t.Fatalf("missing or incorrect mode/ownership for %s", name)
+		}
+		want, err := os.ReadFile(filepath.Join("..", "..", "build", "package", "scripts", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(entry.data, want) {
+			t.Fatalf("package differs from canonical %s", name)
 		}
 	}
 	for _, file := range []struct {

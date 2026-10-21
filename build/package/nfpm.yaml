@@ -18,8 +18,11 @@ license: MIT
 depends:
   - systemd (>= 235)
 
-# No maintainer scripts: installation does not enable/start/restart the service.
-# Administrators explicitly manage daemon-reload and service lifecycle.
+# Refresh unit definitions only. Service activation/restarts remain explicit.
+scripts:
+  postinstall: build/package/scripts/postinst
+  postremove: build/package/scripts/postrm
+
 contents:
   - src: "dist/${ARCH}/lantern"
     dst: /usr/bin/lantern

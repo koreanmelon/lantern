@@ -124,7 +124,10 @@ out of `internal/`. Do not recreate a separate `ZoneHandler` or `hosted` package
   `dist/amd64/`, `dist/arm64/`, or `dist/arm7/` first. `arm7` maps to Debian `armhf`.
   From `v0.1.5`, releases include amd64 (x86_64), arm64, and armhf. Retain older
   ARM-only releases unchanged; APT must not require retroactive amd64 assets.
-- No package hooks automatically enable/start/restart/remove service state.
+- Package hooks reload systemd unit definitions after configure and remove/purge,
+  guarded by systemd availability; failures warn without failing dpkg. They never
+  enable/start/stop/restart Lantern or remove service state. Skip postrm upgrade;
+  the new package reloads on configure.
 - The project uses the canonical root `LICENSE` (MIT); the Debian package installs
   it as `/usr/share/doc/lantern/copyright`. Keep packaged documentation/license
   contents synchronized with source files.
