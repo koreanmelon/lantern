@@ -81,6 +81,10 @@ func New(z *zone.Zone, additionalHosts ...string) (http.Handler, error) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		fmt.Fprint(w, notificationScript)
 	})
+	mux.HandleFunc("GET /assets/theme.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		fmt.Fprint(w, themeScript)
+	})
 	protected := http.NewCrossOriginProtection().Handler(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

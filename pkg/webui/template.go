@@ -7,39 +7,27 @@ const pageTemplate = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
   <title>{{if .Form}}{{.Form.Title}}{{else}}DNS records{{end}} · Lantern</title>
+  <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/style.css">
   <script src="/assets/notifications.js" defer></script>
 </head>
 <body>
 <div class="app">
-  <aside class="sidebar">
-    <a class="brand" href="/" aria-label="Lantern home">
-      <span class="brand-mark"><svg width="25" height="29" viewBox="0 0 25 29" fill="none" aria-hidden="true"><path d="M8 7V5a4.5 4.5 0 0 1 9 0v2M5 9h15l2 14H3L5 9Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M1 26h23M9 13l-1 7m8-7 1 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
-      <span>lantern<span class="brand-caption">NETWORK WORKSPACE</span></span>
-    </a>
-    <div class="workspace-label">YOUR WORKSPACE</div>
-    <nav aria-label="Main navigation">
-      <a href="/" class="nav-item active"><span class="nav-icon">◈</span> DNS records <span class="nav-count">{{.Total}}</span></a>
-      <a href="/#reference" class="nav-item"><span class="nav-icon">≡</span> Record reference</a>
-    </nav>
-    <div class="zone-card">
-      <span class="small-label">CURRENT ZONE</span>
-      <strong>{{.Origin}}</strong>
-      <span><i class="status-dot"></i> Authoritative · IN class</span>
-    </div>
-    <div class="sidebar-bottom">
-      <span class="security-icon">↳</span>
-      <div><strong>Your network. Your names.</strong><p>No authentication is enabled. Keep this dashboard on a trusted interface.</p></div>
-    </div>
-    <div class="sidebar-footer">LANTERN <span>LOCAL DNS</span></div>
-  </aside>
-
   <div class="workspace">
-    <header class="topbar">
-      <div class="breadcrumb">Workspace <span>/</span> <a href="/">DNS</a>{{if .Form}} <span>/</span> {{.Form.Title}}{{end}}</div>
-      <div class="topbar-meta"><span class="live-pill"><i class="status-dot"></i> Live editor</span><span class="revision">Revision {{.Revision}}</span></div>
+    <header class="page-header">
+      <div class="topbar">
+        <div class="header-identity">
+          <a class="brand" href="/" aria-label="Lantern home">
+            <span class="brand-mark"><svg width="25" height="29" viewBox="0 0 25 29" fill="none" aria-hidden="true"><path d="M8 7V5a4.5 4.5 0 0 1 9 0v2M5 9h15l2 14H3L5 9Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M1 26h23M9 13l-1 7m8-7 1 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+            <span>lantern</span>
+          </a>
+          <div class="header-zone"><span class="small-label">CURRENT ZONE</span><strong>{{.Origin}}</strong><span class="zone-kind">Authoritative · IN class</span></div>
+        </div>
+        <div class="topbar-meta"><label class="theme-control" hidden><span class="sr-only">Color theme</span><select id="theme-preference"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label><span class="live-pill"><i class="status-dot"></i> Live editor</span><span class="revision">Revision {{.Revision}}</span></div>
+      </div>
+      <p class="access-warning"><strong>No authentication is enabled.</strong> Keep this dashboard on a trusted interface.</p>
     </header>
 
     <main id="main" tabindex="-1">

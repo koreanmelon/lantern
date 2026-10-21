@@ -311,6 +311,19 @@ not replace the runtime record file. No systemd service is installed by the appl
 Open **http://127.0.0.1:8080** for the dashboard. The application serves DNS and
 the dashboard together; Ctrl-C shuts down both.
 
+Use the **System / Light / Dark** selector in the header to choose a theme.
+The preference is stored locally in that browser for the dashboard's origin,
+not in the zone or record file, and applies across page loads and open tabs.
+System mode follows device theme changes automatically. Without JavaScript,
+the UI follows the system setting; if browser storage is blocked, a manual
+choice still works for the current page but cannot be remembered.
+
+The single-page record manager uses a compact header rather than a sidebar:
+Lantern's home link, the current zone, theme selector, and unauthenticated-access
+warning stay visible on record lists and edit forms. Add record remains beside
+the page title; the collapsible record format guide is available below the table
+and on edit forms.
+
 The dashboard is implemented entirely in Go with `net/http`, `html/template`, and
 Go string assets. A small, locally served vanilla-JavaScript enhancement makes
 success notifications dismissible overlay toasts, without a frontend build step,
