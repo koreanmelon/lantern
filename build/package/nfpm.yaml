@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
 # Run from the repository root. Export VERSION, ARCH, and MAINTAINER first.
-# ARCH uses nFPM's Go-style names: arm64 or arm7 (Debian arm64 or armhf).
+# ARCH uses nFPM's Go-style names: amd64, arm64, or arm7 (Debian armhf).
 # The binary in dist/${ARCH}/lantern must already be compiled for that target.
 name: lantern
 arch: "${ARCH}"

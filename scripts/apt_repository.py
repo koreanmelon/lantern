@@ -20,10 +20,11 @@ import urllib.request
 
 
 FINGERPRINT = "C4B45272C3850D898F9B0A42AF494EF0B97CBBAC"
-ARCHITECTURES = ("arm64", "armhf")
+ARCHITECTURES = ("amd64", "arm64", "armhf")
+AMD64_SINCE = (0, 1, 5)
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
-POOL = re.compile(r"pool/main/l/lantern/lantern_[0-9]+\.[0-9]+\.[0-9]+-[1-9][0-9]*_(arm64|armhf)\.deb\Z")
-BY_HASH = re.compile(r"dists/stable/main/binary-(arm64|armhf)/by-hash/(SHA256/[0-9a-f]{64}|SHA512/[0-9a-f]{128})\Z")
+POOL = re.compile(r"pool/main/l/lantern/lantern_[0-9]+\.[0-9]+\.[0-9]+-[1-9][0-9]*_(amd64|arm64|armhf)\.deb\Z")
+BY_HASH = re.compile(r"dists/stable/main/binary-(amd64|arm64|armhf)/by-hash/(SHA256/[0-9a-f]{64}|SHA512/[0-9a-f]{128})\Z")
 
 
 def run(*args, cwd=None, data=None, env=None):
@@ -163,7 +164,7 @@ def checksums(data, names):
             raise ValueError("Malformed or duplicate SHA256SUMS entry")
         result[match[2]] = match[1]
     if set(result) != set(names):
-        raise ValueError("SHA256SUMS must cover exactly both package files")
+        raise ValueError("SHA256SUMS must cover exactly the selected package files")
     return result
 
 
@@ -174,9 +175,14 @@ def release_packages(release):
         raise ValueError("Missing checksums or duplicate release asset names")
     selected = []
     versions = set()
+    legacy = tuple(map(int, TAG.fullmatch(release["tag_name"]).groups())) < AMD64_SINCE
     for arch in ARCHITECTURES:
         pattern = re.compile(rf"lantern_({re.escape(version)}-[1-9][0-9]*)_{arch}\.deb\Z")
         matches = [(name, pattern.fullmatch(name)) for name in names if pattern.fullmatch(name)]
+        # Old published ARM-only releases remain valid and immutable. Starting
+        # with v0.1.5, all releases must contain the complete architecture set.
+        if arch == "amd64" and legacy and not matches:
+            continue
         if len(matches) != 1:
             raise ValueError(f"Expected one {arch} package in {release['tag_name']}")
         name, match = matches[0]
@@ -234,7 +240,7 @@ def build(site, repository, url, bootstrap):
     write(site / "dists/stable/catalog.json", json.dumps(catalog, sort_keys=True, indent=2).encode() + b"\n")
     expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
     options = {"Origin": "Lantern", "Label": "Lantern", "Suite": "stable", "Codename": "stable",
-               "Architectures": "arm64 armhf", "Components": "main", "Acquire-By-Hash": "yes",
+               "Architectures": " ".join(ARCHITECTURES), "Components": "main", "Acquire-By-Hash": "yes",
                "MD5": "false", "SHA1": "false"}
     # The default Release scan includes Packages but not our retention catalog.
     args = ["apt-ftparchive", "-o", "APT::FTPArchive::Release::Patterns::=catalog.json"]
@@ -245,7 +251,7 @@ def build(site, repository, url, bootstrap):
     release = f"Valid-Until: {expiry:%a, %d %b %Y %H:%M:%S +0000}\n".encode() + release
     write(site / "dists/stable/Release", release)
     write(site / ".nojekyll", b"")
-    write(site / "index.html", b"<!doctype html><title>Lantern APT repository</title><h1>Lantern APT repository</h1><p>Signed stable packages for arm64 and armhf.</p><p><a href='https://github.com/koreanmelon/lantern/blob/main/docs/apt-repository.md'>Setup instructions</a></p>\n")
+    write(site / "index.html", b"<!doctype html><title>Lantern APT repository</title><h1>Lantern APT repository</h1><p>Signed stable packages for amd64, arm64, and armhf.</p><p><a href='https://github.com/koreanmelon/lantern/blob/main/docs/apt-repository.md'>Setup instructions</a></p>\n")
     verify_site(site)
 
 
@@ -335,6 +341,11 @@ def smoke(site, url=None):
                 env = dict(os.environ, APT_CONFIG=str(config), LC_ALL="C")
                 run("apt-get", "--error-on=any", "update", env=env)
                 packages = [(name, entry) for name, entry in catalog["packages"].items() if entry["architecture"] == arch]
+                if not packages:
+                    # The tooling can be deployed before the first amd64 release.
+                    # release_packages still requires amd64 for v0.1.5 and later.
+                    print(f"No published {arch} packages yet; index verification passed")
+                    continue
                 latest = max((entry["version"] for _, entry in packages), key=functools.cmp_to_key(compare_versions))
                 policy = run("apt-cache", "policy", f"lantern:{arch}", env=env).decode()
                 if f"Candidate: {latest}" not in policy:

@@ -121,7 +121,9 @@ out of `internal/`. Do not recreate a separate `ZoneHandler` or `hosted` package
 - systemd uses DynamicUser, CAP_NET_BIND_SERVICE, StateDirectory `lantern`, and
   WorkingDirectory `/var/lib/lantern`. Keep its state writable within the sandbox.
 - nFPM v2.48.0: export VERSION, ARCH, MAINTAINER; build static Linux binaries in
-  `dist/arm64/` or `dist/arm7/` first. `arm7` maps to Debian `armhf`.
+  `dist/amd64/`, `dist/arm64/`, or `dist/arm7/` first. `arm7` maps to Debian `armhf`.
+  From `v0.1.5`, releases include amd64 (x86_64), arm64, and armhf. Retain older
+  ARM-only releases unchanged; APT must not require retroactive amd64 assets.
 - No package hooks automatically enable/start/restart/remove service state.
 - The project uses the canonical root `LICENSE` (MIT); the Debian package installs
   it as `/usr/share/doc/lantern/copyright`. Keep packaged documentation/license
@@ -172,7 +174,7 @@ LANTERN_DEB_FILE="$PWD/dist/lantern_0.1.0-1_arm64.deb" \
   go test -tags=integration ./tests/integration -run '^TestDebianPackage$' -v
 ```
 
-Repeat for armhf. Do not claim Linux/systemd or GitHub Actions execution was
+Repeat for armhf and amd64. Do not claim Linux/systemd or GitHub Actions execution was
 verified merely because cross-compilation, archive inspection, or actionlint passed.
 
 ## Current verification handoff

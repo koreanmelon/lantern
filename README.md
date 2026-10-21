@@ -147,7 +147,15 @@ GOARM=7 CGO_ENABLED=0` to `dist/arm7/lantern`. nFPM maps `arm7` to Debian `armhf
 `arm64` remains `arm64`. Match the Pi's OS (`dpkg --print-architecture`), not merely
 the CPU. The build architecture must agree with the manifest architecture—nFPM
 does not compile or verify the input executable for you. Set all three exported
-metadata variables before packaging. To use a pinned tool without installing it:
+metadata variables before packaging.
+
+For x86_64 Linux, use `ARCH=amd64`, compile with `CGO_ENABLED=0 GOOS=linux
+GOARCH=amd64` to `dist/amd64/lantern`, and package with the same manifest. Debian
+calls x86_64 `amd64`, for both Intel and AMD CPUs. Packages require systemd-based
+Linux; this is not a macOS or Windows build. Release `v0.1.5` introduces amd64;
+older published ARM packages are retained unchanged.
+
+To use a pinned tool without installing it:
 
 ```sh
 go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0 package \
@@ -155,7 +163,7 @@ go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0 package \
 ```
 
 The package revision is `1`, so version `0.1.0` produces
-`lantern_0.1.0-1_arm64.deb` (or `_armhf.deb`). Change the package revision when
+`lantern_0.1.0-1_arm64.deb` (or `_armhf.deb`; newer releases also `_amd64.deb`). Change the package revision when
 repackaging the same upstream version. Files are root-owned with explicit modes:
 
 | Source | Installed destination |
@@ -217,9 +225,9 @@ git push origin v0.1.0
 ```
 
 Only stable `vMAJOR.MINOR.PATCH` tags are accepted, without leading zeros or
-prerelease suffixes. The workflow cross-compiles ARM64/ARMv7 binaries, packages
+prerelease suffixes. The workflow cross-compiles x86_64/ARM64/ARMv7 Linux binaries, packages
 them with pinned nFPM, checks package metadata and contents without installation,
-and creates a **draft** GitHub Release with both `.deb` files and `SHA256SUMS`.
+and creates a **draft** GitHub Release with all three `.deb` files and `SHA256SUMS`.
 Build jobs have read-only repository permissions; only the final job can create
 the draft, and it does not build or execute project code. Actions are pinned by
 commit SHA. Packages are also retained as workflow artifacts for 14 days.

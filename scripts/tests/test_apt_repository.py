@@ -24,6 +24,18 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(altered=altered), self.assertRaises(ValueError):
                 apt.release_packages(dict(release, assets=[{"name": n} for n in altered]))
 
+    def test_amd64_release_assets(self):
+        names = ["SHA256SUMS"] + [f"lantern_0.1.5-1_{arch}.deb" for arch in apt.ARCHITECTURES]
+        release = {"tag_name": "v0.1.5", "assets": [{"name": n} for n in names]}
+        self.assertEqual(len(apt.release_packages(release)), 3)
+        for arch in apt.ARCHITECTURES:
+            altered = [name for name in names if not name.endswith(f"_{arch}.deb")]
+            with self.subTest(missing=arch), self.assertRaises(ValueError):
+                apt.release_packages(dict(release, assets=[{"name": n} for n in altered]))
+        altered = [name.replace("0.1.5-1_amd64", "0.1.5-2_amd64") for name in names]
+        with self.assertRaises(ValueError):
+            apt.release_packages(dict(release, assets=[{"name": n} for n in altered]))
+
     def test_checksum_manifest(self):
         sha = "a" * 64
         self.assertEqual(apt.checksums(f"{sha}  ./a.deb\n".encode(), ["a.deb"]), {"a.deb": sha})
@@ -66,12 +78,14 @@ class AptClientTests(unittest.TestCase):
             fixtures = root / "fixtures"
             fixtures.mkdir()
             releases = []
-            for version in ("0.1.0", "0.1.1", "0.1.2"):
+            for version in ("0.1.0", "0.1.5", "0.1.6"):
                 assets = []
                 sums = []
                 release_dir = fixtures / ("v" + version)
                 release_dir.mkdir()
                 for arch in apt.ARCHITECTURES:
+                    if version == "0.1.0" and arch == "amd64":
+                        continue
                     package = root / f"package-{version}-{arch}"
                     (package / "DEBIAN").mkdir(parents=True)
                     (package / "DEBIAN/control").write_text(f"Package: lantern\nVersion: {version}-1\nArchitecture: {arch}\nMaintainer: Fixture <fixture@example.invalid>\nDescription: APT test fixture\n")
@@ -81,7 +95,7 @@ class AptClientTests(unittest.TestCase):
                     assets.append({"name": name})
                     sums.append(f"{apt.digest((release_dir / name).read_bytes())}  ./{name}\n")
                 (release_dir / "SHA256SUMS").write_text("".join(sums))
-                releases.append({"tag_name": "v" + version, "draft": version == "0.1.2", "prerelease": False, "assets": assets + [{"name": "SHA256SUMS"}]})
+                releases.append({"tag_name": "v" + version, "draft": version == "0.1.6", "prerelease": False, "assets": assets + [{"name": "SHA256SUMS"}]})
             releases += [{"tag_name": "v0.2.0-rc.1", "draft": False, "prerelease": True}]
             original_run = apt.run
 
@@ -96,11 +110,19 @@ class AptClientTests(unittest.TestCase):
                 return original_run(*args, **kwargs)
 
             site = root / "site"
+            legacy_site = root / "legacy-site"
             empty = {"packages": {}, "indexes": {}}
             with patch.object(apt, "run", side_effect=fake_github), patch.object(apt, "previous_repository", return_value=empty):
+                # Main can receive the new tooling before any amd64 release is
+                # published. Exercise the empty amd64 index and smoke fallback.
+                releases[1]["draft"] = True
+                apt.build(legacy_site, "test/lantern", "https://unused.invalid", True)
+                releases[1]["draft"] = False
                 apt.build(site, "test/lantern", "https://unused.invalid", True)
+            self.assertEqual(len(apt.verify_site(legacy_site)["packages"]), 2)
             catalog = apt.verify_site(site)
-            self.assertEqual(len(catalog["packages"]), 4)
+            self.assertEqual(len(catalog["packages"]), 5)
+            self.assertFalse(any("0.1.0-1_amd64" in name for name in catalog["packages"]))
             metadata = (site / "dists/stable/Release").read_text()
             self.assertIn("Acquire-By-Hash: yes", metadata)
             self.assertIn("Valid-Until:", metadata)
@@ -114,6 +136,9 @@ class AptClientTests(unittest.TestCase):
                 test_fingerprint = next(line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:"))
                 secret = original_run("gpg", "--homedir", str(home), "--batch", "--pinentry-mode", "loopback", "--passphrase", "fixture-passphrase", "--armor", "--export-secret-keys", test_fingerprint).decode()
                 with patch.object(apt, "FINGERPRINT", test_fingerprint):
+                    with patch.dict(os.environ, APT_SIGNING_KEY=secret, APT_SIGNING_PASSPHRASE="fixture-passphrase"):
+                        apt.sign(legacy_site)
+                    apt.smoke(legacy_site)
                     with patch.dict(os.environ, APT_SIGNING_KEY=secret, APT_SIGNING_PASSPHRASE="wrong-passphrase"), self.assertRaises(subprocess.CalledProcessError):
                         apt.sign(site)
                     with patch.dict(os.environ, APT_SIGNING_KEY=secret, APT_SIGNING_PASSPHRASE="fixture-passphrase"):
@@ -143,7 +168,7 @@ class AptClientTests(unittest.TestCase):
                         with patch.object(apt, "run", side_effect=fake_github):
                             apt.build(root / "second", "test/lantern", "https://previous.invalid", False)
                         rebuilt = apt.verify_site(root / "second")
-                        self.assertEqual(len(rebuilt["packages"]), 6)
+                        self.assertEqual(len(rebuilt["packages"]), 8)
                         self.assertTrue(catalog["indexes"].items() <= rebuilt["indexes"].items())
 
                         # --decrypt accepts unsigned literal-data packets; the

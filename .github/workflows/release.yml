@@ -83,6 +83,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - arch: amd64
+            goarch: amd64
+            goarm: ''
+            debarch: amd64
           - arch: arm64
             goarch: arm64
             goarm: ''
@@ -164,8 +168,9 @@ jobs:
           assets=(./*.deb)
           arm64=(./*_arm64.deb)
           armhf=(./*_armhf.deb)
-          if (( ${#assets[@]} != 2 || ${#arm64[@]} != 1 || ${#armhf[@]} != 1 )); then
-            printf '::error::Expected one arm64 package and one armhf package.\n'
+          amd64=(./*_amd64.deb)
+          if (( ${#assets[@]} != 3 || ${#arm64[@]} != 1 || ${#armhf[@]} != 1 || ${#amd64[@]} != 1 )); then
+            printf '::error::Expected one amd64, one arm64, and one armhf package.\n'
             exit 1
           fi
           sha256sum ./*.deb > SHA256SUMS
@@ -185,5 +190,5 @@ jobs:
           fi
           gh release create "$TAG" --verify-tag --draft --title "lantern $TAG" \
             --generate-notes \
-            --notes 'Install the .deb matching your Pi OS: arm64 for 64-bit, armhf for 32-bit. Verify SHA256SUMS before installation. Service activation is manual. Record state is stored separately under /var/lib/lantern with the packaged unit; back it up before upgrading. Review the assets and notes before publishing this draft.' \
+            --notes 'Install the .deb matching your Linux OS: amd64 for x86_64, arm64 for 64-bit ARM, armhf for ARMv7. Verify SHA256SUMS before installation. Service activation is manual. Record state is stored separately under /var/lib/lantern with the packaged unit; back it up before upgrading. Review the assets and notes before publishing this draft.' \
             ./*.deb SHA256SUMS

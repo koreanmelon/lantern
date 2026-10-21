@@ -1,14 +1,15 @@
 # Lantern APT repository
 
 The public repository is hosted at **https://koreanmelon.github.io/lantern/**.
-It serves `stable/main` for Debian `arm64` and `armhf` (choose the Pi's OS
-architecture, not its CPU). GitHub Releases remain the authoritative package
+It serves `stable/main` for Debian `amd64`, `arm64`, and `armhf` (choose the host's
+OS architecture, not just its CPU). `amd64` is x86_64 Linux, including Intel and
+AMD CPUs. GitHub Releases remain the authoritative package
 archive. Generated indexes and package copies are deployed to Pages, never
 committed to Git. There is no GitHub Packages registry.
 
-## Configure a Pi once
+## Configure a Linux host once
 
-Use Raspberry Pi OS/Debian with a supported architecture:
+Use systemd-based Debian/Raspberry Pi OS with a supported architecture:
 
 ```sh
 dpkg --print-architecture
@@ -30,7 +31,7 @@ fingerprint, not a value downloaded alongside the key. Never use `apt-key`,
 (
   set -eu
   arch="$(dpkg --print-architecture)"
-  case "$arch" in arm64|armhf) ;; *) echo "Unsupported OS architecture: $arch" >&2; exit 1 ;; esac
+  case "$arch" in amd64|arm64|armhf) ;; *) echo "Unsupported OS architecture: $arch" >&2; exit 1 ;; esac
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
   mkdir -m 0700 "$tmp/gpg"
@@ -79,7 +80,9 @@ For a first installation, review the configuration and follow
 APT setup does not change the router, Tailscale settings, DNS bind addresses, or
 client resolver settings. The dashboard still has no authentication or TLS.
 
-Older retained versions are available with `apt-cache madison lantern`. An
+Older retained versions are available with `apt-cache madison lantern`. `amd64`
+starts at `v0.1.5`; older releases remain ARM-only and are not rebuilt. All stable
+releases from `v0.1.5` onward must contain all three architecture packages. An
 intentional rollback requires choosing the exact version and allowing a
 downgrade; newer state formats may not be backward compatible, so retain backups.
 
@@ -108,7 +111,7 @@ refresh leaves margin before the 30-day expiry and does not upgrade any Pi.
 The complete rebuild/sign/verify/deploy sequence is serialized. Every run:
 
 1. Uses default-branch tooling, pinned to one commit for all jobs.
-2. Fetches every published stable release and verifies both package checksums,
+2. Fetches every published stable release and verifies its package checksums,
    package names, Debian versions, and architecture fields without installing or
    executing them.
 3. Verifies the prior Pages signature against the pinned key, checks its signed
@@ -124,7 +127,7 @@ The complete rebuild/sign/verify/deploy sequence is serialized. Every run:
    passphrase is sent via stdin, never process arguments. The temporary agent and
    keyring are removed, including on errors.
 6. Uses secret-free, isolated APT clients to update with signature verification
-   and forced by-hash acquisition, then download every retained version for both
+   and forced by-hash acquisition, then download every retained version for all
    architectures. No packages are installed and host APT sources are untouched.
 7. Deploys the complete static site, then repeats the client checks against the
    public URL. A failed post-deployment check must be investigated; it cannot

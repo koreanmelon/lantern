@@ -119,6 +119,10 @@ func TestDebianPackage(t *testing.T) {
 	}
 	defer program.Close()
 	switch {
+	case strings.Contains(metadata, "Architecture: amd64\n"):
+		if program.Machine != elf.EM_X86_64 || program.Class != elf.ELFCLASS64 {
+			t.Fatal("amd64 package contains wrong binary architecture")
+		}
 	case strings.Contains(metadata, "Architecture: arm64\n"):
 		if program.Machine != elf.EM_AARCH64 || program.Class != elf.ELFCLASS64 {
 			t.Fatal("arm64 package contains wrong binary architecture")
@@ -128,7 +132,7 @@ func TestDebianPackage(t *testing.T) {
 			t.Fatal("armhf package contains wrong binary architecture")
 		}
 	default:
-		t.Fatal("expected a Raspberry Pi arm64 or armhf package")
+		t.Fatal("expected an amd64, arm64, or armhf package")
 	}
 	for _, segment := range program.Progs {
 		if segment.Type == elf.PT_INTERP {
