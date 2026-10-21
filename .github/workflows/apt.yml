@@ -1,4 +1,4 @@
-name: Publish APT repository
+name: APT
 
 on:
   release:
@@ -9,9 +9,10 @@ on:
         description: Allow the first deployment when no signed repository exists
         type: boolean
         default: false
+  # Refresh on Saturdays at 09:00 UTC.
   # Release metadata expires after 30 days; refresh even without a new release.
   schedule:
-    - cron: '23 6 * * 1'
+    - cron: '0 9 * * 6'
 
 permissions:
   contents: read
@@ -121,7 +122,7 @@ jobs:
       pages: write
       id-token: write
     environment:
-      name: github-pages
+      name: apt-stable
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

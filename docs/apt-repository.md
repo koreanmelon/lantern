@@ -93,6 +93,18 @@ and weekly to refresh the 30-day `Valid-Until` metadata. Drafts and prereleases
 are excluded. A release published using the built-in `GITHUB_TOKEN` may not
 trigger another workflow; dispatch APT publication explicitly in that case.
 
+The workflows are displayed as **CI**, **Release**, and **APT**, matching their
+filenames. The APT deploy job uses the **`apt-stable`** GitHub environment: a
+deployment gate/history, not a separate host. Its selected-ref rules allow the
+`main` branch (manual and scheduled refreshes) and `v*` tags (published releases).
+This policy does not restrict Git pushes to `main`. The old `github-pages`
+environment may remain for historical deployments; the Pages artifact name
+`github-pages` is independent and unchanged.
+
+Refresh is scheduled for Saturdays at **09:00 UTC**. GitHub may delay scheduled
+runs; the schedule is not an exact execution-time guarantee. Weekly
+refresh leaves margin before the 30-day expiry and does not upgrade any Pi.
+
 The complete rebuild/sign/verify/deploy sequence is serialized. Every run:
 
 1. Uses default-branch tooling, pinned to one commit for all jobs.
