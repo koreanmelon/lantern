@@ -198,12 +198,13 @@ verified merely because cross-compilation, archive inspection, or actionlint pas
 
 ## Current verification handoff
 
-- Python-to-Go APT migration is local/uncommitted. Production still uses Python.
-  Portable Go tests and workflow lint passed; real Linux APT and optional
-  Python/Go differential tests were explicitly deferred by the user. Run both
-  acceptance tests from `docs/apt-repository.md` before deploying the migration.
-  Do not claim Linux parity, signing-job execution, or live publication verified
-  merely from mocked tests. No new dependencies or service-lifecycle changes.
+- Python-to-Go APT migration was committed/pushed as `315226c` and deployed.
+  Linux CI `39571762101`, Python/Go differential CI `39571938772`, and live Go
+  APT pipeline `39572195677` passed. This covers real signing, shared-binary
+  artifacts, Python-generated history, retention, and public APT downloads for
+  all three architectures. No new dependencies or service-lifecycle changes.
+  The acceptance commands in `docs/apt-repository.md` remain useful for changes;
+  cloud download checks still do not establish client installation/systemd behavior.
 
 - Lantern releases through `v0.1.5` are published. The user reports running the
   installed ARM64 binary under systemd on the Pi and querying it over Tailscale.

@@ -278,8 +278,12 @@ normal push/PR/release tests do not need Python:
 gh workflow run ci.yml --ref main -f apt_python_parity=true
 ```
 
-**Migration acceptance:** run the real Linux test and optional differential test
-before deploying the migration. Both were explicitly deferred during local
-implementation; portable tests are not evidence that those tests passed. A
-passing Linux smoke establishes index/signature/download behavior, not actual
-installation, ARM execution, or systemd behavior on a client.
+**Migration acceptance:** the Linux test passed in CI run `39571762101`; the
+optional differential comparison passed in `39571938772`. The full Go APT
+pipeline `39572195677` subsequently passed generation, production signing,
+shared-binary artifact transfer, deployment, and public client downloads for all
+three architectures. These checks were initially deferred locally, then run
+after explicit authorization. Repeat them when changing compatibility-sensitive
+tooling; portable tests alone do not establish those properties. A passing Linux
+smoke establishes index/signature/download behavior, not actual installation,
+ARM execution, or systemd behavior on a client.
