@@ -198,9 +198,26 @@ Building or inspecting packages does not install them or alter system services.
 
 ## GitHub Releases
 
-For repeatable Pi upgrades without manually downloading `.deb` files, configure
+For repeatable Linux upgrades without manually downloading `.deb` files, configure
 the signed [APT repository](docs/apt-repository.md) once. Then use
 `sudo apt update` and `sudo apt install lantern`; service restarts stay explicit.
+
+| Workflow | Trigger | Responsibility |
+|---|---|---|
+| **CI** (`ci.yml`) | PR, push to `main`, manual, reusable call | Formatting, module consistency, vet, race tests, and isolated APT-tooling tests. No publication or signing secrets. |
+| **Release** (`release.yml`) | Stable version tag, or manual existing-tag input | Test the exact tagged commit, build/inspect Linux packages, and create a draft release. Never publishes automatically. |
+| **APT** (`apt.yml`) | Release publication, manual, Saturday 09:00 UTC | Rebuild indexes from published releases, sign, verify, deploy Pages, and verify live downloads. |
+
+APT deploys through `apt-stable`, which allows `main` and `v*` tags. Weekly
+refresh renews the 30-day metadata expiry; it does not release a new application
+version or upgrade clients. GitHub may delay scheduled runs.
+
+APT generation/signing/client verification is implemented by the standard-library
+Go command `cmd/aptrepo` (`build`, `sign`, `smoke`). No additional Go dependencies
+or Python runtime are required. The workflow compiles the tool before secrets
+are available and shares that exact binary with the signing and verification
+jobs. See [tool verification and migration checks](docs/apt-repository.md#tool-commands-and-verification)
+for local commands and Linux acceptance tests.
 
 `.github/workflows/ci.yml` checks formatting, module files, vet, and race-enabled
 unit/integration tests on pull requests, pushes to `main`, and manual runs. The
@@ -220,8 +237,9 @@ Merge the workflows first, then tag a commit containing them (commands below
 are a procedure, not something the application runs):
 
 ```sh
-git tag -a v0.1.0 -m 'Lantern v0.1.0'
-git push origin v0.1.0
+VERSION=0.1.6 # Example: choose the next unused version, not an existing tag.
+git tag -a "v$VERSION" -m "lantern v$VERSION"
+git push origin "v$VERSION"
 ```
 
 Only stable `vMAJOR.MINOR.PATCH` tags are accepted, without leading zeros or
@@ -235,10 +253,10 @@ commit SHA. Packages are also retained as workflow artifacts for 14 days.
 To build an existing tag manually (for example, if its push did not trigger a
 run), first ensure the manual-trigger workflow is on `main`. Open **Actions →
 Release → Run workflow**, choose **main** as the workflow branch, and enter the
-existing tag, such as `v0.1.0`. Or use GitHub CLI:
+existing tag. Or use GitHub CLI (substitute the tag you intend to build):
 
 ```sh
-gh workflow run release.yml --ref main -f tag=v0.1.0
+gh workflow run release.yml --ref main -f tag="v$VERSION"
 ```
 
 The manual path validates the tag, resolves its commit, and tests and packages
@@ -248,6 +266,17 @@ Neither path moves tags, publishes automatically, or overwrites existing release
 
 Wait for the workflow to finish, review the draft/metadata/assets, complete the
 [Pi/systemd verification](docs/pi-verification.md), and publish the draft manually.
+With GitHub CLI, after reviewing the draft:
+
+```sh
+gh release edit "v$VERSION" --draft=false
+```
+
+Publication through GitHub's UI or an authenticated user CLI triggers APT
+publication. Wait for **APT → check-live** to pass before announcing availability
+through APT. Publication with the built-in `GITHUB_TOKEN` does not trigger a
+second workflow; in that case run `gh workflow run apt.yml --ref main` explicitly.
+
 Users can download matching packages and verify `sha256sum --check SHA256SUMS`.
 Published stable releases also feed the signed [APT repository](docs/apt-repository.md)
 hosted on GitHub Pages. There is no GitHub Packages registry or automatic service
@@ -258,6 +287,28 @@ Rerunning a workflow does not overwrite an existing draft or published release.
 If an asset upload fails after creating a draft, inspect/remove only that
 incomplete draft in GitHub before rerunning. Never replace a published release's
 assets; use a new version tag for subsequent releases.
+
+### Consume packages through APT
+
+Follow the [one-time key and source setup](docs/apt-repository.md#configure-a-linux-host-once).
+It verifies the public-key fingerprint, installs the key under `/etc/apt/keyrings`,
+and creates a `Signed-By`-restricted source for `stable/main`. Do not use `apt-key`,
+`trusted=yes`, or disabled signature checks. Supported OS architectures are
+`amd64`, `arm64`, and `armhf`; amd64 packages begin at `v0.1.5`.
+
+After setup, back up startup configuration and record state before upgrading:
+
+```sh
+sudo apt update
+apt-cache policy lantern
+sudo apt install lantern
+# For an existing service, deliberately load the upgraded unit and binary:
+sudo systemctl daemon-reload
+sudo systemctl restart lantern
+```
+
+An initial installation does not activate the service. Review configuration and
+follow [Pi/systemd verification](docs/pi-verification.md) before enabling it.
 
 ## Running under systemd
 

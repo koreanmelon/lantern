@@ -101,8 +101,8 @@ filenames. The APT deploy job uses the **`apt-stable`** GitHub environment: a
 deployment gate/history, not a separate host. Its selected-ref rules allow the
 `main` branch (manual and scheduled refreshes) and `v*` tags (published releases).
 This policy does not restrict Git pushes to `main`. The old `github-pages`
-environment may remain for historical deployments; the Pages artifact name
-`github-pages` is independent and unchanged.
+environment has been removed; the Pages artifact name `github-pages` is
+independent and unchanged.
 
 Refresh is scheduled for Saturdays at **09:00 UTC**. GitHub may delay scheduled
 runs; the schedule is not an exact execution-time guarantee. Weekly
@@ -110,7 +110,11 @@ refresh leaves margin before the 30-day expiry and does not upgrade any Pi.
 
 The complete rebuild/sign/verify/deploy sequence is serialized. Every run:
 
-1. Uses default-branch tooling, pinned to one commit for all jobs.
+1. Uses default-branch tooling and compiles `cmd/aptrepo` once in the read-only
+   generation job. Subsequent jobs download that exact binary using verified
+   workflow artifacts; signing never compiles code or exposes secrets to Go's
+   build tools. The command uses only Go's standard library, with no new module
+   dependencies. Python is not needed for publication or normal tests.
 2. Fetches every published stable release and verifies its package checksums,
    package names, Debian versions, and architecture fields without installing or
    executing them.
@@ -190,16 +194,92 @@ Expired or unavailable signing keys fail publication. If weekly refresh fails,
 the existing metadata eventually expires and APT rejects it. Fix signing and
 republish rather than disabling client expiry/signature checks.
 
-## Local verification
+## Tool commands and verification
 
-Pure validation tests work with Python's standard library. On Linux with
-`apt-utils`, `dpkg`, and GnuPG, the same command also creates disposable keys and
-package fixtures and exercises real isolated APT clients:
+`cmd/aptrepo` replaces the former Python script. Its operations retain the same
+CLI roles and on-disk repository layout:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -v
+mkdir -p dist
+go build -trimpath -o dist/aptrepo ./cmd/aptrepo
+dist/aptrepo build --site dist/apt --repository koreanmelon/lantern \
+  --url https://koreanmelon.github.io/lantern
+# Only in an authorized signing environment with the two secrets set:
+dist/aptrepo sign --site dist/apt
+dist/aptrepo smoke --site dist/apt
+dist/aptrepo smoke --site dist/apt --url https://koreanmelon.github.io/lantern
 ```
 
-CI runs the Linux checks. They do not use the real repository signing key. A
-passing Linux client smoke proves index/signature/download behavior—not actual
-ARM execution, package installation, or systemd behavior on a Pi.
+`build` requires a new output directory; it never overwrites an existing tree.
+No command deploys Pages or installs packages. Do not use `go run` for signing
+with production secrets: compile the tool before making secrets available, as
+the workflow does. Runtime flags/environment cannot change the pinned key. Tests
+build a separate fixture binary with a disposable fingerprint; never publish it.
+
+Portable unit tests exercise validation, retention, signature-before-extraction
+ordering, cleanup, subprocess secret filtering, limits, CLI errors, and mocked
+build/sign flows:
+
+```sh
+go test -race -count=1 ./cmd/aptrepo
+```
+
+On Linux, install `apt-utils`, `dpkg`, and GnuPG before running the real-tool test:
+
+```sh
+go test -race -count=1 -tags=integration ./tests/integration \
+  -run '^TestAPTRepositoryCLI$' -v
+```
+
+This test uses inert package fixtures and disposable keys. It covers ARM-only
+history, amd64 introduction, all-version downloads, wrong passphrases, corrupt
+signatures/catalogs/packages, unsigned OpenPGP messages, and second-generation
+retention. It does not use the production signing key, install packages, or
+contact GitHub/Pages. It skips on non-Linux hosts; Linux runs fail if tools are
+missing, so CI cannot silently skip real APT validation.
+
+### One-off Python-to-Go differential check
+
+Baseline: commit `ac0c1837b969473ac9dba04b90792504728dc1a6` contains the last Python
+implementation. Its Linux CI `39558570337` and published APT run `39559152621`
+passed. The original Python validation suite also passed locally before removal;
+Linux tests were skipped locally. A local live-signature baseline probe failed
+on GnuPG agent initialization and is not counted as successful verification.
+
+On a Linux verification host with Python available, export the historical script
+to temporary storage and enable the optional differential portion of the same
+test. This is the only test path requiring Python:
+
+```sh
+(
+  set -eu
+  baseline="$(mktemp)"
+  trap 'rm -f "$baseline"' EXIT
+  git show --no-ext-diff --no-textconv \
+    ac0c1837b969473ac9dba04b90792504728dc1a6:scripts/apt_repository.py > "$baseline"
+  LANTERN_APT_PYTHON_BASELINE="$baseline" \
+    go test -race -count=1 -tags=integration ./tests/integration \
+      -run '^TestAPTRepositoryCLI$' -v
+)
+```
+
+Use a clone containing that commit (a depth-one CI checkout may not). The test
+compares package catalogs semantically and decompressed index bytes, cross-signs
+and consumes both implementations' artifacts, and builds each implementation on
+the other's signed history. Compressed bytes and timestamps/signatures need not
+be identical; Go and Python can produce different valid gzip streams. All prior
+by-hash objects must remain available regardless.
+
+Alternatively, manually run **CI** on `main` with the `apt_python_parity` input
+enabled. This read-only, secret-free path fetches the pinned baseline explicitly;
+normal push/PR/release tests do not need Python:
+
+```sh
+gh workflow run ci.yml --ref main -f apt_python_parity=true
+```
+
+**Migration acceptance:** run the real Linux test and optional differential test
+before deploying the migration. Both were explicitly deferred during local
+implementation; portable tests are not evidence that those tests passed. A
+passing Linux smoke establishes index/signature/download behavior, not actual
+installation, ARM execution, or systemd behavior on a client.

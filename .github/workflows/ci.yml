@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      apt_python_parity:
+        description: Run the one-off Linux Python-to-Go APT migration comparison
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       ref:
@@ -53,12 +58,22 @@ jobs:
         run: go vet -tags=integration ./...
       - name: Unit tests
         run: go test -race -shuffle=on -count=1 ./...
-      - name: Integration tests (including compiled-app restart smoke)
-        run: go test -race -shuffle=on -count=1 -tags=integration ./tests/integration/...
-      - name: Test APT repository tooling with isolated clients
-        # Older source tags predate the APT tooling; reusable CI still supports them.
-        if: hashFiles('scripts/apt_repository.py') != ''
+      - name: Install APT integration prerequisites
+        # Older source tags predate the Go APT tool; reusable CI still supports them.
+        if: hashFiles('cmd/aptrepo/main.go') != ''
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y apt-utils gnupg
-          python3 -m unittest discover -s scripts/tests -v
+      - name: Integration tests (including restart and APT client smoke)
+        run: go test -race -shuffle=on -count=1 -tags=integration ./tests/integration/...
+      - name: Compare Go APT tooling with the pinned Python baseline
+        if: github.event_name == 'workflow_dispatch' && inputs.apt_python_parity
+        env:
+          BASELINE_COMMIT: ac0c1837b969473ac9dba04b90792504728dc1a6
+          LANTERN_APT_PYTHON_BASELINE: ${{ runner.temp }}/apt-python-baseline.py
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASELINE_COMMIT"
+          git show --no-ext-diff --no-textconv \
+            "$BASELINE_COMMIT:scripts/apt_repository.py" > "$LANTERN_APT_PYTHON_BASELINE"
+          go test -race -count=1 -tags=integration ./tests/integration \
+            -run '^TestAPTRepositoryCLI$' -v

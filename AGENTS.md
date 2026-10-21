@@ -131,12 +131,18 @@ out of `internal/`. Do not recreate a separate `ZoneHandler` or `hosted` package
 - GitHub Releases retain the authoritative packages; published stable releases
   also feed a signed APT repository on this repository's GitHub Pages site.
   No GitHub Packages registry. Generated packages/indexes never enter Git.
-  `scripts/apt_repository.py` uses Python's standard library and Ubuntu APT/GPG
-  tooling (build tools, not application dependencies). Preserve checksum/metadata
+  `cmd/aptrepo` uses Go's standard library and Ubuntu APT/GPG tooling (build tools,
+  not application dependencies). Its build/sign/smoke commands replace Python.
+  Compile the tool in the read-only generation job before secrets are available,
+  share that binary via verified artifacts, and never compile in the signing job.
+  Preserve checksum/metadata
   validation, signed retention checks, historical by-hash indexes, fingerprint
   pinning, and separate generation/signing/deployment jobs. Only the signing step
   receives APT secrets; only the deployment job gets Pages write/OIDC permissions.
   See `docs/apt-repository.md` for bootstrap, refresh, retention, and key rotation.
+  Workflow display names are `CI`, `Release`, and `APT`. APT deployment uses the
+  `apt-stable` environment, allowing `main` and `v*` tags; do not remove those
+  protections. Refresh runs Saturdays at 09:00 UTC for 30-day metadata expiry.
   Stable `vMAJOR.MINOR.PATCH` tag pushes build verified packages and SHA256SUMS,
   then create a **draft** for manual review/publication.
 - Repository variable `PACKAGE_MAINTAINER` must contain real public package
@@ -145,6 +151,18 @@ out of `internal/`. Do not recreate a separate `ZoneHandler` or `hosted` package
 - Do not commit, tag, push, publish, install packages, or start system services
   unless explicitly requested. Commit style is short Conventional Commits, e.g.
   `feat: configuration and Debian packaging`, `chore: move config to pkg`.
+- Release procedure: commit/push authorized changes, create an unused stable tag,
+  wait for Release CI and all three package inspections, review the draft/assets,
+  then publish only with authorization. Never move tags or replace released assets.
+  User CLI/UI publication triggers APT; built-in `GITHUB_TOKEN` publication does
+  not, so explicitly dispatch `apt.yml --ref main` in that case. Wait for APT's
+  `check-live` job before claiming that a version is available via APT.
+- Consumer setup is documented in README and `docs/apt-repository.md`: verify the
+  pinned full public-key fingerprint, install the key in `/etc/apt/keyrings`,
+  configure a `Signed-By` source for `stable/main`, then `apt update` / `apt install
+  lantern`. Never recommend `apt-key`, `trusted=yes`, or disabled signature checks.
+  Back up config/state and explicitly restart an existing service after upgrade;
+  first-install service activation and Pi/systemd checks remain deliberate actions.
 
 ## Verification
 
@@ -154,7 +172,8 @@ go test -race -shuffle=on -count=1 -tags=integration ./tests/integration/...
 go vet -tags=integration ./...
 git diff --check
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/apt.yml
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -v
+go test -race -count=1 ./cmd/aptrepo
+go test -race -count=1 -tags=integration ./tests/integration -run '^TestAPTRepositoryCLI$' -v
 ```
 
 Keep pure unit tests alongside code and real-socket tests in `tests/integration`.
@@ -179,12 +198,24 @@ verified merely because cross-compilation, archive inspection, or actionlint pas
 
 ## Current verification handoff
 
-- Lantern releases through `v0.1.2` are published. The user reports running the
+- Python-to-Go APT migration is local/uncommitted. Production still uses Python.
+  Portable Go tests and workflow lint passed; real Linux APT and optional
+  Python/Go differential tests were explicitly deferred by the user. Run both
+  acceptance tests from `docs/apt-repository.md` before deploying the migration.
+  Do not claim Linux parity, signing-job execution, or live publication verified
+  merely from mocked tests. No new dependencies or service-lifecycle changes.
+
+- Lantern releases through `v0.1.5` are published. The user reports running the
   installed ARM64 binary under systemd on the Pi and querying it over Tailscale.
 - Signed APT hosting is live at `https://koreanmelon.github.io/lantern/`.
   Bootstrap run `39209488997` and normal refresh `39209683374` both passed,
   including real isolated APT updates/downloads for both architectures against
   the public URL. Existing stable release versions are retained.
+- Automatic publication-triggered APT runs `39558391487` (v0.1.4) and
+  `39559152621` (v0.1.5) passed through `apt-stable`, including live downloads.
+  Main and `v*` tag deployments are allowed. v0.1.5 is the first amd64 release;
+  its release run `39558737514` and Linux CI `39558570337` passed with all three
+  architectures and mixed legacy/new-version APT history.
 - Linux CI `39209269798` passed the repository tests, including disposable signing
   keys, wrong-key/passphrase failures, unsigned-message rejection, tampering,
   and second-generation retention. Review found no remaining actionable issue.
